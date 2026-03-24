@@ -8,10 +8,16 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub branding: BrandingConfig,
     pub toolchain: ToolchainConfig,
+    pub library_roots: Vec<PathBuf>,
+    pub state_dir: PathBuf,
+    pub api_token: Option<String>,
+    pub audit_db_path: PathBuf,
 }
 
 impl AppConfig {
     pub fn from_env() -> Self {
+        let state_dir = env_path("MM_STATE_DIR").unwrap_or_else(|| PathBuf::from(".mm-state"));
+
         Self {
             server: ServerConfig {
                 host: env::var("MM_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
@@ -40,6 +46,11 @@ impl AppConfig {
                 ffprobe_path: env_path("MM_FFPROBE_PATH"),
                 mediainfo_path: env_path("MM_MEDIAINFO_PATH"),
             },
+            library_roots: env_paths("MM_LIBRARY_ROOTS"),
+            state_dir: state_dir.clone(),
+            api_token: env::var("MM_API_TOKEN").ok().filter(|v| !v.trim().is_empty()),
+            audit_db_path: env_path("MM_AUDIT_DB_PATH")
+                .unwrap_or_else(|| state_dir.join("audit.sqlite3")),
         }
     }
 }
@@ -74,4 +85,12 @@ pub struct ToolchainConfig {
 
 fn env_path(key: &str) -> Option<PathBuf> {
     env::var(key).ok().map(PathBuf::from)
+}
+
+fn env_paths(key: &str) -> Vec<PathBuf> {
+    let Some(value) = env::var_os(key) else {
+        return Vec::new();
+    };
+
+    env::split_paths(&value).collect()
 }

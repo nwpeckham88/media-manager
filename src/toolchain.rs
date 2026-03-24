@@ -25,7 +25,6 @@ pub struct ResolvedBinary {
 #[serde(rename_all = "snake_case")]
 pub enum ProbeStatus {
     Ok,
-    Missing,
     Unavailable,
 }
 

@@ -1,0 +1,63 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap');
+
+:root {
+	--bg: #f4efe4;
+	--bg-alt: #e9dfcb;
+	--text: #1f2a2f;
+	--muted: #44565f;
+	--accent: #0f766e;
+	--accent-contrast: #f8fafc;
+	--danger: #b45309;
+	--card: #fffaf0;
+	--ring: rgba(15, 118, 110, 0.25);
+}
+
+html[data-theme='dark'] {
+	--bg: #151e25;
+	--bg-alt: #1b2a33;
+	--text: #e4efe9;
+	--muted: #9bb1bb;
+	--accent: #34d399;
+	--accent-contrast: #052e2b;
+	--danger: #fb923c;
+	--card: #1d2a33;
+	--ring: rgba(52, 211, 153, 0.26);
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	padding: 0;
+	min-height: 100%;
+	font-family: 'Space Grotesk', sans-serif;
+	color: var(--text);
+	background:
+		radial-gradient(circle at 10% 20%, rgba(15, 118, 110, 0.14), transparent 35%),
+		radial-gradient(circle at 90% 0%, rgba(180, 83, 9, 0.1), transparent 30%),
+		linear-gradient(160deg, var(--bg), var(--bg-alt));
+}
+
+a {
+	color: inherit;
+}
+
+code,
+pre,
+.mono {
+	font-family: 'IBM Plex Mono', monospace;
+}
+
+.theme-toggle {
+	border: 1px solid var(--ring);
+	background: color-mix(in srgb, var(--card) 84%, transparent);
+	color: var(--text);
+	padding: 0.45rem 0.7rem;
+	border-radius: 999px;
+	font-weight: 700;
+	cursor: pointer;
+	backdrop-filter: blur(2px);
+}
