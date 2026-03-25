@@ -47,10 +47,19 @@ fn scan_root(root: &Path) -> RootScanSummary {
 
     let allowed = media_extensions();
     let mut media_files = 0_u64;
+    let mut walk_errors = 0_u64;
+    let mut first_walk_error: Option<String> = None;
 
     for item in WalkDir::new(root) {
-        let Ok(entry) = item else {
-            continue;
+        let entry = match item {
+            Ok(entry) => entry,
+            Err(err) => {
+                walk_errors += 1;
+                if first_walk_error.is_none() {
+                    first_walk_error = Some(err.to_string());
+                }
+                continue;
+            }
         };
 
         if !entry.file_type().is_file() {
@@ -74,7 +83,14 @@ fn scan_root(root: &Path) -> RootScanSummary {
         root: root_display,
         exists: true,
         media_files,
-        error: None,
+        error: if walk_errors == 0 {
+            None
+        } else {
+            Some(format!(
+                "encountered {walk_errors} traversal error(s); first: {}",
+                first_walk_error.unwrap_or_else(|| "unknown error".to_string())
+            ))
+        },
     }
 }
 
@@ -85,4 +101,70 @@ fn media_extensions() -> HashSet<&'static str> {
     ]
     .into_iter()
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use super::scan_library_roots;
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        dir.push(format!("mm-scanner-{name}-{nanos}"));
+        dir
+    }
+
+    #[test]
+    fn counts_known_media_extensions() {
+        let root = unique_temp_dir("count-media");
+        fs::create_dir_all(&root).expect("create root");
+        fs::write(root.join("movie.mkv"), b"x").expect("write mkv");
+        fs::write(root.join("note.txt"), b"x").expect("write txt");
+
+        let summary = scan_library_roots(std::slice::from_ref(&root));
+        assert_eq!(summary.total_media_files, 1);
+        assert!(summary.roots[0].error.is_none());
+
+        fs::remove_dir_all(root).expect("cleanup root");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reports_walk_errors_for_unreadable_subdirs() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = unique_temp_dir("walk-errors");
+        let blocked = root.join("blocked");
+        fs::create_dir_all(&blocked).expect("create blocked dir");
+        fs::write(blocked.join("secret.mkv"), b"x").expect("write file in blocked dir");
+
+        let original_mode = fs::metadata(&blocked)
+            .expect("stat blocked dir")
+            .permissions()
+            .mode();
+
+        let mut no_access = fs::metadata(&blocked)
+            .expect("stat blocked dir for chmod")
+            .permissions();
+        no_access.set_mode(0o000);
+        fs::set_permissions(&blocked, no_access).expect("chmod blocked dir");
+
+        let summary = scan_library_roots(std::slice::from_ref(&root));
+
+        let mut restore = fs::metadata(&blocked)
+            .expect("stat blocked dir for restore")
+            .permissions();
+        restore.set_mode(original_mode);
+        fs::set_permissions(&blocked, restore).expect("restore blocked dir permissions");
+        fs::remove_dir_all(root).expect("cleanup root");
+
+        assert_eq!(summary.roots.len(), 1);
+        assert!(summary.roots[0].error.is_some());
+    }
 }

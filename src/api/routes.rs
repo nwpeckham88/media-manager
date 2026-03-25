@@ -22,6 +22,9 @@ use crate::sidecar_workflow;
 use crate::sidecar_workflow::{SidecarApplyResult, SidecarPlan, SidecarRollbackResult};
 use crate::toolchain::ToolchainSnapshot;
 
+const DEFAULT_RECENT_LIMIT: usize = 20;
+const MAX_RECENT_LIMIT: usize = 200;
+
 #[derive(Clone)]
 pub struct AppState {
     pub branding: BrandingConfig,
@@ -119,7 +122,7 @@ async fn recent_operations(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RecentOpsQuery>,
 ) -> Json<Vec<OperationEvent>> {
-    let limit = query.limit.unwrap_or(20);
+    let limit = normalize_recent_limit(query.limit);
     match state.audit_store.recent_events(limit) {
         Ok(events) => Json(events),
         Err(_) => Json(state.operation_log.recent(limit)),
@@ -130,7 +133,7 @@ async fn recent_jobs(
     State(state): State<Arc<AppState>>,
     Query(query): Query<RecentOpsQuery>,
 ) -> Json<Vec<JobRecord>> {
-    let limit = query.limit.unwrap_or(20);
+    let limit = normalize_recent_limit(query.limit);
     match state.jobs_store.recent_jobs(limit) {
         Ok(jobs) => Json(jobs),
         Err(_) => Json(Vec::new()),
@@ -148,7 +151,7 @@ async fn read_sidecar(
     );
 
     let media_path = PathBuf::from(query.media_path);
-    if let Err(err) = ensure_media_path_allowed(&media_path, &state.library_roots) {
+    if let Err(err) = ensure_media_file_path_allowed(&media_path, &state.library_roots) {
         complete_job(&state, job_id, JobStatus::Failed, None, Some(err.1.clone()));
         return Err(err);
     }
@@ -206,7 +209,7 @@ async fn upsert_sidecar(
     );
 
     let media_path = PathBuf::from(request.media_path);
-    if let Err(err) = ensure_media_path_allowed(&media_path, &state.library_roots) {
+    if let Err(err) = ensure_media_file_path_allowed(&media_path, &state.library_roots) {
         complete_job(&state, job_id, JobStatus::Failed, None, Some(err.1.clone()));
         return Err(err);
     }
@@ -272,7 +275,7 @@ async fn sidecar_dry_run(
     );
 
     let media_path = PathBuf::from(request.media_path);
-    if let Err(err) = ensure_media_path_allowed(&media_path, &state.library_roots) {
+    if let Err(err) = ensure_media_file_path_allowed(&media_path, &state.library_roots) {
         complete_job(&state, job_id, JobStatus::Failed, None, Some(err.1.clone()));
         return Err(err);
     }
@@ -317,7 +320,7 @@ async fn sidecar_apply(
     );
 
     let media_path = PathBuf::from(request.media_path);
-    if let Err(err) = ensure_media_path_allowed(&media_path, &state.library_roots) {
+    if let Err(err) = ensure_media_file_path_allowed(&media_path, &state.library_roots) {
         complete_job(&state, job_id, JobStatus::Failed, None, Some(err.1.clone()));
         return Err(err);
     }
@@ -472,7 +475,13 @@ fn current_timestamp_ms() -> u128 {
         .unwrap_or(0)
 }
 
-fn ensure_media_path_allowed(
+fn normalize_recent_limit(limit: Option<usize>) -> usize {
+    limit
+        .unwrap_or(DEFAULT_RECENT_LIMIT)
+        .min(MAX_RECENT_LIMIT)
+}
+
+fn ensure_media_file_path_allowed(
     media_path: &PathBuf,
     library_roots: &[PathBuf],
 ) -> Result<(), (StatusCode, String)> {
@@ -487,6 +496,13 @@ fn ensure_media_path_allowed(
         return Err((
             StatusCode::BAD_REQUEST,
             format!("media path does not exist: {}", media_path.display()),
+        ));
+    }
+
+    if !media_path.is_file() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("media path is not a file: {}", media_path.display()),
         ));
     }
 
@@ -571,4 +587,62 @@ struct SidecarUpsertResponse {
 #[derive(Debug, Serialize)]
 struct SidecarDryRunResponse {
     plan: SidecarPlan,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use axum::http::StatusCode;
+
+    use super::{
+        DEFAULT_RECENT_LIMIT, MAX_RECENT_LIMIT, ensure_media_file_path_allowed, normalize_recent_limit,
+    };
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        dir.push(format!("mm-routes-{name}-{nanos}"));
+        dir
+    }
+
+    #[test]
+    fn recent_limit_defaults_and_caps() {
+        assert_eq!(normalize_recent_limit(None), DEFAULT_RECENT_LIMIT);
+        assert_eq!(normalize_recent_limit(Some(7)), 7);
+        assert_eq!(normalize_recent_limit(Some(MAX_RECENT_LIMIT + 10)), MAX_RECENT_LIMIT);
+    }
+
+    #[test]
+    fn media_path_must_be_file_within_root() {
+        let root = unique_temp_dir("media-file-policy");
+        let library = root.join("library");
+        let outside = root.join("outside");
+        fs::create_dir_all(&library).expect("create library");
+        fs::create_dir_all(&outside).expect("create outside");
+
+        let file_in_root = library.join("movie.mkv");
+        let dir_in_root = library.join("series");
+        fs::write(&file_in_root, b"x").expect("create media file");
+        fs::create_dir_all(&dir_in_root).expect("create nested dir");
+
+        let file_outside = outside.join("movie.mkv");
+        fs::write(&file_outside, b"x").expect("create outside file");
+
+        let roots = vec![library.clone()];
+        assert!(ensure_media_file_path_allowed(&file_in_root, &roots).is_ok());
+
+        let dir_err = ensure_media_file_path_allowed(&dir_in_root, &roots).expect_err("dir should fail");
+        assert_eq!(dir_err.0, StatusCode::BAD_REQUEST);
+
+        let outside_err = ensure_media_file_path_allowed(&file_outside, &roots)
+            .expect_err("outside root should fail");
+        assert_eq!(outside_err.0, StatusCode::FORBIDDEN);
+
+        fs::remove_dir_all(root).expect("cleanup root");
+    }
 }

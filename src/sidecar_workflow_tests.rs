@@ -37,6 +37,7 @@ mod tests {
         assert!(rollback.restored);
 
         assert!(!media_dir.join(".mm.json").exists());
+        assert!(!state_dir.join("rollback").join(format!("{}.json", applied.operation_id)).exists());
 
         fs::remove_dir_all(root).expect("cleanup test directory");
     }

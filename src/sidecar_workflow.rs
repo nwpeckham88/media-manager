@@ -2,6 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,9 @@ use thiserror::Error;
 
 use crate::domain::sidecar::SidecarState;
 use crate::sidecar_store;
+
+static OPERATION_NONCE: AtomicU64 = AtomicU64::new(0);
+static SNAPSHOT_TEMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,6 +68,8 @@ pub enum SidecarWorkflowError {
     RollbackSnapshotEncode(String),
     #[error("rollback snapshot write failed: {0}")]
     RollbackSnapshotWrite(String),
+    #[error("rollback snapshot delete failed: {0}")]
+    RollbackSnapshotDelete(String),
 }
 
 pub fn build_plan(media_path: &Path, item_uid: &str) -> Result<SidecarPlan, SidecarWorkflowError> {
@@ -143,6 +149,8 @@ pub fn rollback_operation(
             .map_err(|e| SidecarWorkflowError::Store(e.to_string()))?;
     }
 
+    delete_rollback_snapshot(state_dir, operation_id)?;
+
     Ok(SidecarRollbackResult {
         operation_id: operation_id.to_string(),
         sidecar_path: sidecar_path.display().to_string(),
@@ -171,7 +179,7 @@ fn write_rollback_snapshot(
     let content = serde_json::to_string_pretty(snapshot)
         .map_err(|e| SidecarWorkflowError::RollbackSnapshotEncode(e.to_string()))?;
 
-    let temp_path = path.with_extension(format!("tmp.{}", std::process::id()));
+    let temp_path = unique_snapshot_temp_path(&path);
     fs::write(&temp_path, content)
         .map_err(|e| SidecarWorkflowError::RollbackSnapshotWrite(format!("write {} ({})", temp_path.display(), e)))?;
 
@@ -196,6 +204,17 @@ fn read_rollback_snapshot(state_dir: &Path, operation_id: &str) -> Result<Rollba
         .map_err(|e| SidecarWorkflowError::RollbackSnapshotDecode(format!("decode {} ({})", path.display(), e)))
 }
 
+fn delete_rollback_snapshot(state_dir: &Path, operation_id: &str) -> Result<(), SidecarWorkflowError> {
+    let path = rollback_snapshot_path(state_dir, operation_id);
+    if !path.exists() {
+        return Ok(());
+    }
+
+    fs::remove_file(&path).map_err(|e| {
+        SidecarWorkflowError::RollbackSnapshotDelete(format!("remove {} ({})", path.display(), e))
+    })
+}
+
 fn hash_plan(
     sidecar_path: &Path,
     existing_state: &Option<SidecarState>,
@@ -214,7 +233,13 @@ fn hash_plan(
 
 fn generate_operation_id() -> String {
     let ts = now_ms();
-    format!("op-{ts}")
+    let nonce = OPERATION_NONCE.fetch_add(1, Ordering::Relaxed);
+    format!("op-{ts}-{nonce}-{}", std::process::id())
+}
+
+fn unique_snapshot_temp_path(path: &Path) -> PathBuf {
+    let nonce = SNAPSHOT_TEMP_NONCE.fetch_add(1, Ordering::Relaxed);
+    path.with_extension(format!("tmp.{}.{}.{}", std::process::id(), now_ms(), nonce))
 }
 
 fn now_ms() -> u128 {
@@ -222,4 +247,20 @@ fn now_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::generate_operation_id;
+
+    #[test]
+    fn operation_ids_are_unique_for_many_generations() {
+        let mut ids = HashSet::new();
+        for _ in 0..2_000 {
+            let id = generate_operation_id();
+            assert!(ids.insert(id));
+        }
+    }
 }

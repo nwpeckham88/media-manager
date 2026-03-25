@@ -1,11 +1,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use thiserror::Error;
 
 use crate::domain::sidecar::SidecarState;
 
 pub const SIDECAR_FILENAME: &str = ".mm.json";
+static SIDECAR_TEMP_NONCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Error)]
 pub enum SidecarStoreError {
@@ -72,7 +75,7 @@ pub fn write_sidecar_at_path(path: &Path, state: &SidecarState) -> Result<(), Si
     let serialized = serde_json::to_string_pretty(state)
         .map_err(|e| SidecarStoreError::EncodeFailed(e.to_string()))?;
 
-    let temp_path = path.with_extension(format!("json.tmp.{}", std::process::id()));
+    let temp_path = unique_sidecar_temp_path(path);
     fs::write(&temp_path, serialized)
         .map_err(|e| SidecarStoreError::WriteFailed(format!("write {} ({})", temp_path.display(), e)))?;
 
@@ -89,4 +92,32 @@ pub fn delete_sidecar_at_path(path: &Path) -> Result<(), SidecarStoreError> {
 
     fs::remove_file(path)
         .map_err(|e| SidecarStoreError::WriteFailed(format!("remove {} ({})", path.display(), e)))
+}
+
+fn unique_sidecar_temp_path(path: &Path) -> PathBuf {
+    let nonce = SIDECAR_TEMP_NONCE.fetch_add(1, Ordering::Relaxed);
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    path.with_extension(format!("json.tmp.{}.{}.{}", std::process::id(), now_ms, nonce))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::path::Path;
+
+    use super::unique_sidecar_temp_path;
+
+    #[test]
+    fn temp_paths_are_unique_for_repeated_generation() {
+        let base = Path::new("/tmp/test.mm.json");
+        let mut paths = HashSet::new();
+
+        for _ in 0..2_000 {
+            let temp = unique_sidecar_temp_path(base);
+            assert!(paths.insert(temp));
+        }
+    }
 }
