@@ -15,7 +15,7 @@ use crate::domain::sidecar::SidecarState;
 use crate::jobs_store::{JobRecord, JobStatus, JobsStore};
 use crate::operations::{OperationEvent, OperationKind, OperationLog};
 use crate::path_policy;
-use crate::preflight::PreflightReport;
+use crate::preflight::{PreflightReport, run_preflight};
 use crate::scanner::ScanSummary;
 use crate::sidecar_store;
 use crate::sidecar_workflow;
@@ -26,7 +26,6 @@ use crate::toolchain::ToolchainSnapshot;
 pub struct AppState {
     pub branding: BrandingConfig,
     pub toolchain: ToolchainSnapshot,
-    pub preflight: PreflightReport,
     pub library_roots: Vec<PathBuf>,
     pub state_dir: PathBuf,
     pub api_token: Option<String>,
@@ -86,12 +85,20 @@ async fn toolchain(State(state): State<Arc<AppState>>) -> Json<ToolchainSnapshot
 }
 
 async fn preflight(State(state): State<Arc<AppState>>) -> Json<PreflightReport> {
-    Json(state.preflight.clone())
+    Json(run_preflight(&state.library_roots, &state.state_dir, &state.toolchain))
 }
 
-async fn scan_summary(State(state): State<Arc<AppState>>) -> Json<ScanSummary> {
+async fn scan_summary(State(state): State<Arc<AppState>>) -> Result<Json<ScanSummary>, (StatusCode, String)> {
     let job_id = create_job(&state, "scan_summary", "{}");
-    let result = crate::scanner::scan_library_roots(&state.library_roots);
+    let library_roots = state.library_roots.clone();
+    let result = tokio::task::spawn_blocking(move || crate::scanner::scan_library_roots(&library_roots))
+        .await
+        .map_err(|e| {
+            let response = internal_error(e);
+            complete_job(&state, job_id, JobStatus::Failed, None, Some(response.1.clone()));
+            response
+        })?;
+
     record_event(
         &state,
         OperationKind::ScanSummary,
@@ -105,7 +112,7 @@ async fn scan_summary(State(state): State<Arc<AppState>>) -> Json<ScanSummary> {
         serde_json::to_string(&result).ok(),
         None,
     );
-    Json(result)
+    Ok(Json(result))
 }
 
 async fn recent_operations(
@@ -218,7 +225,9 @@ async fn upsert_sidecar(
         }
     };
 
-    let sidecar_state = existing.unwrap_or_else(|| SidecarState::new(request.item_uid));
+    let mut sidecar_state = existing.unwrap_or_else(|| SidecarState::new(request.item_uid.clone()));
+    sidecar_state.item_uid = request.item_uid;
+
     let sidecar_path = match sidecar_store::write_sidecar(&media_path, &sidecar_state) {
         Ok(v) => v,
         Err(err) => {
@@ -495,7 +504,8 @@ fn ensure_media_path_allowed(
 }
 
 fn ensure_preflight_ready(state: &AppState) -> Result<(), (StatusCode, String)> {
-    if state.preflight.ready {
+    let report = run_preflight(&state.library_roots, &state.state_dir, &state.toolchain);
+    if report.ready {
         return Ok(());
     }
 

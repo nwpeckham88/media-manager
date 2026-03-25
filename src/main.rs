@@ -26,7 +26,6 @@ use api::routes::{AppState, router};
 use audit_store::AuditStore;
 use jobs_store::JobsStore;
 use operations::OperationLog;
-use preflight::run_preflight;
 use tokio::net::TcpListener;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
@@ -79,12 +78,9 @@ async fn main() {
         }
     };
 
-    let preflight = run_preflight(&config.library_roots, &config.state_dir, &toolchain);
-
     let state = Arc::new(AppState {
         branding: config.branding.clone(),
         toolchain,
-        preflight,
         library_roots: config.library_roots.clone(),
         state_dir: config.state_dir.clone(),
         api_token: config.api_token.clone(),

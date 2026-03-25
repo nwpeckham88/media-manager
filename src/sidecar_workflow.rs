@@ -73,13 +73,14 @@ pub fn build_plan(media_path: &Path, item_uid: &str) -> Result<SidecarPlan, Side
     let existing_state = sidecar_store::read_sidecar_at_path(&sidecar_path)
         .map_err(|e| SidecarWorkflowError::Store(e.to_string()))?;
 
-    let next_state = existing_state
+    let mut next_state = existing_state
         .clone()
         .unwrap_or_else(|| SidecarState::new(item_uid.to_string()));
+    next_state.item_uid = item_uid.to_string();
 
     let action = match &existing_state {
         None => SidecarPlanAction::Create,
-        Some(current) if current.item_uid != next_state.item_uid => SidecarPlanAction::Update,
+        Some(current) if current.item_uid != item_uid => SidecarPlanAction::Update,
         Some(_) => SidecarPlanAction::Noop,
     };
 

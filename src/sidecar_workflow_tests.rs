@@ -40,4 +40,32 @@ mod tests {
 
         fs::remove_dir_all(root).expect("cleanup test directory");
     }
+
+    #[test]
+    fn updates_item_uid_for_existing_sidecar() {
+        let root = unique_temp_dir("workflow-update");
+        let media_dir = root.join("library");
+        let state_dir = root.join("state");
+        fs::create_dir_all(&media_dir).expect("create media dir");
+
+        let media = media_dir.join("movie.mkv");
+        fs::write(&media, b"x").expect("write media file");
+
+        let first_plan = sidecar_workflow::build_plan(&media, "movie-1").expect("build first plan");
+        sidecar_workflow::apply_plan(&media, "movie-1", &first_plan.plan_hash, &state_dir)
+            .expect("apply first plan");
+
+        let second_plan = sidecar_workflow::build_plan(&media, "movie-2").expect("build second plan");
+        assert!(matches!(second_plan.action, sidecar_workflow::SidecarPlanAction::Update));
+        assert_eq!(second_plan.next_state.item_uid, "movie-2");
+
+        let applied = sidecar_workflow::apply_plan(&media, "movie-2", &second_plan.plan_hash, &state_dir)
+            .expect("apply second plan");
+        assert_eq!(applied.applied_state.item_uid, "movie-2");
+
+        let sidecar_content = fs::read_to_string(media_dir.join(".mm.json")).expect("read sidecar");
+        assert!(sidecar_content.contains("movie-2"));
+
+        fs::remove_dir_all(root).expect("cleanup test directory");
+    }
 }

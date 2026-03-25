@@ -1,0 +1,15 @@
+.git/
+target/
+node_modules/
+frontend/node_modules/
+frontend/.svelte-kit/
+frontend/build/
+state/
+.mm-state/
+.env
+.env.local
+.local/
+*.tmp
+*.temp
+*.swp
+*~
