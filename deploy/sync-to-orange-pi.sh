@@ -12,7 +12,6 @@ DELETE_FLAG="${2:-}"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 EXCLUDES_FILE="${ROOT_DIR}/deploy/rsync-excludes.txt"
 LOCAL_ENV_FILE="${ROOT_DIR}/.env.orange-pi"
-LOCAL_COMPOSE_FILE="${ROOT_DIR}/docker-compose.orange-pi.yml"
 LOCAL_DEPLOY_KEY="${ROOT_DIR}/.local/ssh/orangepi_deploy_ed25519"
 
 if [[ "${DEST}" != *:* ]]; then
@@ -30,11 +29,6 @@ fi
 
 if [[ ! -f "${LOCAL_ENV_FILE}" ]]; then
   echo "Missing ${LOCAL_ENV_FILE}. Create it from deploy/.env.orange-pi.example first." >&2
-  exit 1
-fi
-
-if [[ ! -f "${LOCAL_COMPOSE_FILE}" ]]; then
-  echo "Missing ${LOCAL_COMPOSE_FILE}" >&2
   exit 1
 fi
 
@@ -63,6 +57,6 @@ else
   SSH_CMD="ssh"
 fi
 
-${SSH_CMD} "${REMOTE_HOST}" "set -e; cd '${REMOTE_PATH}'; cp -f .env.orange-pi .env; cp -f docker-compose.orange-pi.yml docker-compose.yml; mkdir -p state"
+${SSH_CMD} "${REMOTE_HOST}" "set -e; cd '${REMOTE_PATH}'; cp -f .env.orange-pi .env; mkdir -p state"
 
 echo "Target ready. Run on target: cd '${REMOTE_PATH}' && docker compose up -d --build"

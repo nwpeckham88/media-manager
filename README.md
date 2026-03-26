@@ -105,13 +105,14 @@ cp deploy/.env.orange-pi.example .env.orange-pi
 
 Set these vars in `.env.orange-pi` for your Orange Pi:
 
+- `MM_PORT`
 - `HOST_MEDIA_MOVIES_PATH`
 - `HOST_MEDIA_TV_PATH`
 - `HOST_STATE_DIR`
 - `MM_LIBRARY_ROOTS`
 - `MM_API_TOKEN` (optional)
 
-Then sync with the helper script (it will copy and rename files on the target):
+Then sync with the helper script (it will copy `.env.orange-pi` to `.env` on the target):
 
 ```bash
 ./deploy/sync-to-orange-pi.sh dietpi@192.168.2.4:/opt/media-manager
@@ -120,7 +121,6 @@ Then sync with the helper script (it will copy and rename files on the target):
 The script syncs repo files and then prepares target deploy names:
 
 - `.env.orange-pi` -> `.env`
-- `docker-compose.orange-pi.yml` -> `docker-compose.yml`
 
 Run on the target host:
 
@@ -131,8 +131,8 @@ docker compose up -d --build
 
 Notes:
 
-- `docker-compose.orange-pi.yml` pins `platform: linux/arm64/v8` for RK3588.
-- Update host bind mounts in `docker-compose.orange-pi.yml` for your media paths.
+- This repo now uses a single compose file: `docker-compose.yml`.
+- Update host bind mounts in `.env`/`.env.orange-pi` for your media paths.
 - If you enable auth, set `MM_API_TOKEN` in the compose environment block.
 - The runtime image installs pinned `jellyfin-ffmpeg` from `ffmpeg/jellyfin-ffmpeg-rk3588.env`.
 
@@ -161,7 +161,7 @@ rsync -az --info=progress2 --exclude-from deploy/rsync-excludes.txt ./ user@oran
 If you want the direct command to also stage target deploy names:
 
 ```bash
-ssh dietpi@192.168.2.4 "cd /opt/media-manager && cp -f .env.orange-pi .env && cp -f docker-compose.orange-pi.yml docker-compose.yml"
+ssh dietpi@192.168.2.4 "cd /opt/media-manager && cp -f .env.orange-pi .env"
 ```
 
 Or use the helper script:
