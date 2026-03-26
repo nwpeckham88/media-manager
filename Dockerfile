@@ -16,7 +16,7 @@ RUN cargo build --release
 FROM debian:bookworm-slim AS runtime
 ARG TARGETARCH
 COPY ffmpeg/jellyfin-ffmpeg-rk3588.env /tmp/jellyfin-ffmpeg-rk3588.env
-RUN apt-get update \
+RUN apt-get -o Acquire::Retries=3 -o Acquire::Check-Valid-Until=false -o Acquire::Check-Date=false update \
         && apt-get install -y --no-install-recommends ca-certificates curl mediainfo \
         && if [ "$TARGETARCH" = "arm64" ]; then \
                 . /tmp/jellyfin-ffmpeg-rk3588.env; \
