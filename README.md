@@ -77,6 +77,16 @@ Unauthenticated endpoints:
 
 ## Container run
 
+Compose reads variables from `.env` in the project root.
+
+1. Create/edit `.env` (for compose and runtime settings):
+
+```bash
+cp .env.example .env
+```
+
+2. Start with compose:
+
 ```bash
 docker compose up -d --build
 ```

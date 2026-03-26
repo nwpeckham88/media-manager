@@ -5,15 +5,15 @@ services:
       dockerfile: Dockerfile
     container_name: media-manager
     ports:
-      - "8080:8080"
+      - "${PUBLISHED_PORT:-8080}:8080"
     environment:
-      MM_HOST: 0.0.0.0
-      MM_PORT: 8080
-      MM_LIBRARY_ROOTS: /media/movies:/media/tv
-      MM_STATE_DIR: /app/.mm-state
-      # MM_API_TOKEN: change-me
+      MM_HOST: ${MM_HOST:-0.0.0.0}
+      MM_PORT: ${MM_PORT:-8080}
+      MM_LIBRARY_ROOTS: ${MM_LIBRARY_ROOTS:-/media/movies:/media/tv}
+      MM_STATE_DIR: ${MM_STATE_DIR:-/app/.mm-state}
+      MM_API_TOKEN: ${MM_API_TOKEN:-}
     volumes:
-      - ./state:/app/.mm-state
-      - /srv/media/movies:/media/movies
-      - /srv/media/tv:/media/tv
+      - ${HOST_STATE_DIR:-./state}:/app/.mm-state
+      - ${HOST_MEDIA_MOVIES_PATH:-/srv/media/movies}:/media/movies
+      - ${HOST_MEDIA_TV_PATH:-/srv/media/tv}:/media/tv
     restart: unless-stopped
