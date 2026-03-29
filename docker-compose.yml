@@ -7,6 +7,8 @@ services:
     container_name: media-manager
     ports:
       - "${MM_PORT:-8080}:${MM_PORT:-8080}"
+    env_file:
+      - .env
     environment:
       MM_HOST: ${MM_HOST:-0.0.0.0}
       MM_PORT: ${MM_PORT:-8080}
@@ -14,7 +16,7 @@ services:
       MM_STATE_DIR: ${MM_STATE_DIR:-/app/.mm-state}
       MM_API_TOKEN: ${MM_API_TOKEN:-}
     volumes:
-      - ${HOST_STATE_DIR:-./state}:/app/.mm-state
-      - ${HOST_MEDIA_MOVIES_PATH:-/srv/media/movies}:/media/movies
-      - ${HOST_MEDIA_TV_PATH:-/srv/media/tv}:/media/tv
+      - ${HOST_STATE_DIR:?Set HOST_STATE_DIR in .env}:/app/.mm-state
+      - ${HOST_MEDIA_MOVIES_PATH:?Set HOST_MEDIA_MOVIES_PATH in .env}:/media/movies
+      - ${HOST_MEDIA_TV_PATH:?Set HOST_MEDIA_TV_PATH in .env}:/media/tv
     restart: unless-stopped

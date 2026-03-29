@@ -133,8 +133,42 @@ Notes:
 
 - This repo now uses a single compose file: `docker-compose.yml`.
 - Update host bind mounts in `.env`/`.env.orange-pi` for your media paths.
+- Compose bind mounts are resolved from `.env` (or `--env-file ...`) on the host running compose.
 - If you enable auth, set `MM_API_TOKEN` in the compose environment block.
 - The runtime image installs pinned `jellyfin-ffmpeg` from `ffmpeg/jellyfin-ffmpeg-rk3588.env`.
+
+## Troubleshooting host media mounts
+
+Run these commands on the host where media exists (for example `192.168.2.4`):
+
+1. Ensure compose interpolation file is present:
+
+```bash
+cd /opt/media-manager
+cp -f .env.orange-pi .env
+```
+
+2. Verify effective bind mounts before startup:
+
+```bash
+docker compose config | sed -n '/volumes:/,/restart:/p'
+```
+
+3. Start and inspect from inside container:
+
+```bash
+docker compose up -d --build
+docker compose exec media-manager sh -lc 'echo MM_LIBRARY_ROOTS=$MM_LIBRARY_ROOTS; ls -la /media; ls -la /media/movies; ls -la /media/tv'
+```
+
+4. Confirm app sees the configured roots:
+
+```bash
+curl -sS http://127.0.0.1:${MM_PORT:-8080}/api/config/app
+curl -sS http://127.0.0.1:${MM_PORT:-8080}/api/scan/summary
+```
+
+If `docker compose config` shows `/srv/media/...` unexpectedly, compose did not load the intended env file for interpolation.
 
 ## Update pinned jellyfin-ffmpeg
 

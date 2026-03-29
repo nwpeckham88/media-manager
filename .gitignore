@@ -1,3 +1,4 @@
 /target
 /.local/
 /.env.orange-pi
+state/audit.sqlite3
