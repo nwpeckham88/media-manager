@@ -13,7 +13,7 @@ services:
     environment:
       MM_HOST: ${MM_HOST:-0.0.0.0}
       MM_PORT: ${MM_PORT:-8080}
-      MM_LIBRARY_ROOTS: ${MM_LIBRARY_ROOTS:-/media/movies:/media/tv}
+      MM_LIBRARY_ROOTS: ${MM_CONTAINER_LIBRARY_ROOTS:-/media/movies:/media/tv}
       MM_STATE_DIR: ${MM_STATE_DIR:-/app/.mm-state}
       MM_API_TOKEN: ${MM_API_TOKEN:-}
       RUST_LOG: ${RUST_LOG:-info,tower_http=info}

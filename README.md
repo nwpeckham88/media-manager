@@ -133,6 +133,7 @@ Notes:
 
 - This repo now uses a single compose file: `docker-compose.yml`.
 - Update host bind mounts in `.env`/`.env.orange-pi` for your media paths.
+- Set `MM_CONTAINER_LIBRARY_ROOTS` to container-visible paths (usually `/media/movies:/media/tv`).
 - Compose bind mounts are resolved from `.env` (or `--env-file ...`) on the host running compose.
 - If you enable auth, set `MM_API_TOKEN` in the compose environment block.
 - The runtime image installs pinned `jellyfin-ffmpeg` from `ffmpeg/jellyfin-ffmpeg-rk3588.env`.
@@ -190,6 +191,8 @@ curl -sS http://127.0.0.1:${MM_PORT:-8080}/api/scan/summary
 ```
 
 If `docker compose config` shows `/srv/media/...` unexpectedly, compose did not load the intended env file for interpolation.
+
+If `/api/scan/summary` reports roots like `/mnt/media/...` with `path does not exist`, your container root variable is wrong for compose. Use `MM_CONTAINER_LIBRARY_ROOTS=/media/movies:/media/tv` and restart.
 
 ## Update pinned jellyfin-ffmpeg
 
