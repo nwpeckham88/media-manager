@@ -55,6 +55,11 @@
 		total_items: number;
 		succeeded: number;
 		failed: number;
+		items: {
+			media_path: string;
+			success: boolean;
+			operation_id: string | null;
+		}[];
 	};
 
 	type BulkDryRunResponse = {
@@ -70,6 +75,18 @@
 		total_items: number;
 		succeeded: number;
 		failed: number;
+		items: {
+			media_path: string;
+			success: boolean;
+			operation_id: string | null;
+			error: string | null;
+		}[];
+	};
+
+	type BulkRollbackResponse = {
+		total_items: number;
+		succeeded: number;
+		failed: number;
 	};
 
 	let loading = $state(false);
@@ -81,6 +98,9 @@
 	let semanticGroups = $state<SemanticDuplicateGroup[]>([]);
 	let mergingKey = $state<string | null>(null);
 	let quarantiningKey = $state<string | null>(null);
+	let rollbacking = $state(false);
+	let rollbackOperationIds = $state<string[]>([]);
+	let rollbackResult = $state<BulkRollbackResponse | null>(null);
 
 	onMount(async () => {
 		await refresh();
@@ -212,6 +232,12 @@
 		}
 
 		const result = (await applyResponse.json()) as BulkApplyResponse;
+		const operationIds = result.items
+			.filter((item) => item.success && !!item.operation_id)
+			.map((item) => item.operation_id as string);
+		if (operationIds.length > 0) {
+			rollbackOperationIds = [...rollbackOperationIds, ...operationIds];
+		}
 		notice = `Merged semantic group to uid=${uid} (ok=${result.succeeded}, fail=${result.failed})`;
 		mergingKey = null;
 		await refresh();
@@ -265,8 +291,43 @@
 		}
 
 		const result = (await response.json()) as ConsolidationQuarantineResponse;
+		const operationIds = result.items
+			.filter((item) => item.success && !!item.operation_id)
+			.map((item) => item.operation_id as string);
+		if (operationIds.length > 0) {
+			rollbackOperationIds = [...rollbackOperationIds, ...operationIds];
+		}
 		notice = `Quarantine complete for hash ${group.content_hash.slice(0, 12)}... (ok=${result.succeeded} fail=${result.failed})`;
 		quarantiningKey = null;
+		await refresh();
+	}
+
+	async function rollbackRecentOps() {
+		if (rollbackOperationIds.length === 0) {
+			error = 'No rollback operations are available in this session.';
+			return;
+		}
+
+		rollbacking = true;
+		error = '';
+		notice = '';
+		const response = await apiFetch('/api/bulk/rollback', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ operation_ids: rollbackOperationIds })
+		});
+		if (!response.ok) {
+			error = await response.text();
+			rollbacking = false;
+			return;
+		}
+
+		rollbackResult = (await response.json()) as BulkRollbackResponse;
+		notice = `Rollback finished (ok=${rollbackResult.succeeded}, fail=${rollbackResult.failed}).`;
+		if (rollbackResult.failed === 0) {
+			rollbackOperationIds = [];
+		}
+		rollbacking = false;
 		await refresh();
 	}
 
@@ -299,11 +360,17 @@
 		<div class="actions">
 			<button type="button" onclick={startIndexing} disabled={indexing || loading}>Start Full Index</button>
 			<button type="button" onclick={refresh} disabled={loading}>Refresh</button>
+			<button type="button" onclick={rollbackRecentOps} disabled={rollbacking || rollbackOperationIds.length === 0}>
+				{rollbacking ? 'Rolling Back...' : 'Rollback Session Ops'}
+			</button>
 			<a class="queue-link" href="/queue">Queue</a>
 		</div>
 
 		{#if notice}
 			<p class="notice mono">{notice}</p>
+		{/if}
+		{#if rollbackResult}
+			<p class="mono">rollback total={rollbackResult.total_items} ok={rollbackResult.succeeded} fail={rollbackResult.failed}</p>
 		{/if}
 		{#if error}
 			<p class="error">{error}</p>

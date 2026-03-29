@@ -10,6 +10,12 @@ Rust backend + SvelteKit frontend service for Jellyfin-oriented media management
   - dry-run
   - apply (requires approved plan hash)
   - rollback (operation snapshot restore)
+- Stage-based media workflow:
+  - Consolidation: index library, detect exact/semantic duplicates, merge IDs, quarantine duplicates
+  - Metadata: apply metadata/provider IDs from NFO-first inference
+  - Formatting: rename media files to `Movie Name (Year)` defaults
+  - In-page rollback controls for recent bulk/stage operations
+- Persistent media index (`media_index`) with hash + ffprobe enrichment for high-confidence duplicate detection
 - Path safety checks (operations only inside configured library roots)
 - Preflight diagnostics endpoint
 - Runtime branding config endpoint
@@ -54,8 +60,18 @@ cargo run
 - `GET /api/diagnostics/toolchain`
 - `GET /api/diagnostics/preflight`
 - `GET /api/scan/summary`
+- `POST /api/index/start`
+- `GET /api/index/stats`
+- `GET /api/index/items`
+- `GET /api/formatting/candidates`
+- `GET /api/consolidation/exact-duplicates`
+- `GET /api/consolidation/semantic-duplicates`
+- `POST /api/consolidation/quarantine`
 - `GET /api/operations/recent?limit=20`
 - `GET /api/jobs/recent?limit=20`
+- `POST /api/bulk/dry-run`
+- `POST /api/bulk/apply`
+- `POST /api/bulk/rollback`
 - `POST /api/sidecar/dry-run`
 - `POST /api/sidecar/apply`
 - `POST /api/sidecar/rollback`

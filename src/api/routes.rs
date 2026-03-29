@@ -1911,16 +1911,41 @@ fn execute_bulk_apply(
             }
 
             match apply_rename_with_rollback(&state.state_dir, &source_path, &target_path) {
-                Ok(operation_id) => applied_items.push(BulkApplyItemResult {
-                    media_path: item.media_path,
-                    final_media_path: Some(target_path_value),
-                    item_uid: item.item_uid,
-                    applied_provider_id: None,
-                    success: true,
-                    operation_id: Some(operation_id),
-                    sidecar_path: None,
-                    error: None,
-                }),
+                Ok(operation_id) => {
+                    if let Err(err) = rename_linked_nfo_sidecar(&source_path, &target_path) {
+                        let rollback_result = rollback_fs_operation(state, &operation_id);
+                        let rollback_note = match rollback_result {
+                            Ok(detail) => format!("; media rollback succeeded: {detail}"),
+                            Err(rollback_err) => {
+                                format!("; media rollback failed: {rollback_err}")
+                            }
+                        };
+                        applied_items.push(BulkApplyItemResult {
+                            media_path: item.media_path,
+                            final_media_path: Some(target_path_value),
+                            item_uid: item.item_uid,
+                            applied_provider_id: None,
+                            success: false,
+                            operation_id: None,
+                            sidecar_path: None,
+                            error: Some(format!(
+                                "rename sidecar update failed: {err}{rollback_note}"
+                            )),
+                        });
+                        continue;
+                    }
+
+                    applied_items.push(BulkApplyItemResult {
+                        media_path: item.media_path,
+                        final_media_path: Some(target_path_value),
+                        item_uid: item.item_uid,
+                        applied_provider_id: None,
+                        success: true,
+                        operation_id: Some(operation_id),
+                        sidecar_path: None,
+                        error: None,
+                    })
+                }
                 Err(err) => applied_items.push(BulkApplyItemResult {
                     media_path: item.media_path,
                     final_media_path: Some(target_path_value),
@@ -2497,14 +2522,29 @@ fn compute_rename_target(media_path: &std::path::Path) -> Result<(PathBuf, Strin
         .and_then(|v| v.to_str())
         .ok_or_else(|| "cannot determine media file stem".to_string())?;
 
-    let normalized = normalize_filename_stem(file_stem);
-    if normalized.is_empty() {
+    let inferred = infer_metadata_candidate(media_path, file_stem, None);
+    let normalized_title = normalize_filename_stem(&inferred.title);
+    let sanitized_title = sanitize_filename_component(&normalized_title);
+    let fallback_title = sanitize_filename_component(&normalize_filename_stem(file_stem));
+    let final_title = if sanitized_title.is_empty() {
+        fallback_title
+    } else {
+        sanitized_title
+    };
+
+    if final_title.is_empty() {
         return Err("rename target stem is empty after normalization".to_string());
     }
 
+    let normalized = if let Some(year) = inferred.year {
+        format!("{final_title} ({year})")
+    } else {
+        final_title
+    };
+
     let target = parent.join(format!("{normalized}{extension}"));
     if target == media_path {
-        return Ok((target, "already normalized".to_string()));
+        return Ok((target, "already matches title/year format".to_string()));
     }
 
     if target.exists() {
@@ -2514,7 +2554,84 @@ fn compute_rename_target(media_path: &std::path::Path) -> Result<(PathBuf, Strin
         ));
     }
 
-    Ok((target, "will normalize filename".to_string()))
+    Ok((target, "will rename to title/year format".to_string()))
+}
+
+fn sanitize_filename_component(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut previous_was_space = false;
+
+    for ch in value.chars() {
+        let mapped = if matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+            ' '
+        } else {
+            ch
+        };
+
+        if mapped.is_whitespace() {
+            if !previous_was_space {
+                output.push(' ');
+            }
+            previous_was_space = true;
+        } else {
+            output.push(mapped);
+            previous_was_space = false;
+        }
+    }
+
+    output.trim().to_string()
+}
+
+fn rename_linked_nfo_sidecar(
+    source_media_path: &std::path::Path,
+    target_media_path: &std::path::Path,
+) -> Result<(), String> {
+    let source_parent = source_media_path
+        .parent()
+        .ok_or_else(|| "cannot determine source parent directory".to_string())?;
+    let target_parent = target_media_path
+        .parent()
+        .ok_or_else(|| "cannot determine target parent directory".to_string())?;
+
+    // Only stem-matching NFO files move with a media rename. movie.nfo stays unchanged.
+    let source_stem = source_media_path
+        .file_stem()
+        .and_then(|v| v.to_str())
+        .ok_or_else(|| "cannot determine source media stem".to_string())?;
+    let target_stem = target_media_path
+        .file_stem()
+        .and_then(|v| v.to_str())
+        .ok_or_else(|| "cannot determine target media stem".to_string())?;
+
+    if source_stem == target_stem && source_parent == target_parent {
+        return Ok(());
+    }
+
+    let source_nfo = source_parent.join(format!("{source_stem}.nfo"));
+    if !source_nfo.exists() {
+        return Ok(());
+    }
+
+    let target_nfo = target_parent.join(format!("{target_stem}.nfo"));
+    if source_nfo == target_nfo {
+        return Ok(());
+    }
+    if target_nfo.exists() {
+        return Err(format!(
+            "target nfo path already exists ({})",
+            target_nfo.display()
+        ));
+    }
+
+    fs::rename(&source_nfo, &target_nfo).map_err(|err| {
+        format!(
+            "failed to rename linked nfo {} -> {} ({err})",
+            source_nfo.display(),
+            target_nfo.display()
+        )
+    })?;
+
+    Ok(())
 }
 
 fn normalize_filename_stem(stem: &str) -> String {
@@ -2581,20 +2698,12 @@ fn duplicate_uid_for_item(
 }
 
 fn duplicate_key_for_media_path(media_path: &std::path::Path) -> String {
+    if let Some(parsed) = parse_nfo_metadata_for_media_path(media_path) {
+        return build_semantic_duplicate_key(&parsed);
+    }
+
     if let Some(parsed) = parse_folder_metadata_from_media_path(media_path) {
-        let title_key = normalize_filename_stem(&parsed.title).to_ascii_lowercase();
-        return format!(
-            "{}|{}|{}",
-            title_key,
-            parsed
-                .year
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "none".to_string()),
-            parsed
-                .provider_id
-                .map(|v| v.to_ascii_lowercase())
-                .unwrap_or_else(|| "provider:none".to_string())
-        );
+        return build_semantic_duplicate_key(&parsed);
     }
 
     let stem = media_path
@@ -2717,6 +2826,27 @@ fn infer_metadata_candidate(
     item_uid: &str,
     metadata_override: Option<&MetadataOverrideInput>,
 ) -> MetadataCandidate {
+    if let Some(parsed) = parse_nfo_metadata_for_media_path(media_path) {
+        let override_title = metadata_override.and_then(|v| normalize_optional_string(&v.title));
+        let override_provider_id =
+            metadata_override.and_then(|v| normalize_optional_string(&v.provider_id));
+        let override_year = metadata_override.and_then(|v| v.year);
+        let override_confidence = metadata_override.and_then(|v| v.confidence);
+
+        let provider_id = parsed
+            .provider_id
+            .unwrap_or_else(|| build_local_provider_id(&parsed.title, parsed.year));
+
+        return MetadataCandidate {
+            title: override_title.unwrap_or(parsed.title),
+            year: override_year.or(parsed.year),
+            provider_id: override_provider_id.unwrap_or(provider_id),
+            confidence: override_confidence
+                .unwrap_or(parsed.confidence)
+                .clamp(0.0, 1.0),
+        };
+    }
+
     if let Some(parsed) = parse_folder_metadata_from_media_path(media_path) {
         let override_title = metadata_override.and_then(|v| normalize_optional_string(&v.title));
         let override_provider_id =
@@ -2817,6 +2947,23 @@ struct ParsedFolderMetadata {
     confidence: f32,
 }
 
+fn build_semantic_duplicate_key(parsed: &ParsedFolderMetadata) -> String {
+    let title_key = normalize_filename_stem(&parsed.title).to_ascii_lowercase();
+    format!(
+        "{}|{}|{}",
+        title_key,
+        parsed
+            .year
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "none".to_string()),
+        parsed
+            .provider_id
+            .as_ref()
+            .map(|v| v.to_ascii_lowercase())
+            .unwrap_or_else(|| "provider:none".to_string())
+    )
+}
+
 fn build_local_provider_id(title: &str, year: Option<u16>) -> String {
     let mut hasher = DefaultHasher::new();
     title.to_ascii_lowercase().hash(&mut hasher);
@@ -2827,6 +2974,147 @@ fn build_local_provider_id(title: &str, year: Option<u16>) -> String {
 fn parse_folder_metadata_from_media_path(media_path: &std::path::Path) -> Option<ParsedFolderMetadata> {
     let folder_name = media_path.parent()?.file_name()?.to_str()?;
     parse_movie_folder_pattern(folder_name)
+}
+
+fn parse_nfo_metadata_for_media_path(media_path: &std::path::Path) -> Option<ParsedFolderMetadata> {
+    let parent = media_path.parent()?;
+    let stem = media_path.file_stem().and_then(|v| v.to_str())?;
+    let candidates = [
+        parent.join(format!("{stem}.nfo")),
+        parent.join("movie.nfo"),
+    ];
+
+    for candidate in &candidates {
+        if !candidate.exists() || !candidate.is_file() {
+            continue;
+        }
+
+        let content = match fs::read_to_string(candidate) {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        if content.trim().is_empty() {
+            continue;
+        }
+
+        if let Some(parsed) = parse_nfo_metadata_content(&content) {
+            return Some(parsed);
+        }
+    }
+
+    None
+}
+
+fn parse_nfo_metadata_content(content: &str) -> Option<ParsedFolderMetadata> {
+    let title = extract_xml_tag_value(content, "title")
+        .or_else(|| extract_xml_tag_value(content, "originaltitle"))
+        .map(|v| normalize_filename_stem(&v))
+        .filter(|v| !v.is_empty())?;
+
+    let year = extract_xml_tag_value(content, "year")
+        .and_then(|v| parse_year_token(&v))
+        .or_else(|| {
+            extract_xml_tag_value(content, "premiered")
+                .and_then(|v| v.get(0..4).map(ToString::to_string))
+                .and_then(|v| parse_year_token(&v))
+        });
+
+    let provider_id = extract_nfo_provider_id(content);
+
+    Some(ParsedFolderMetadata {
+        title,
+        year,
+        provider_id,
+        confidence: 0.99,
+    })
+}
+
+fn extract_xml_tag_value(content: &str, tag: &str) -> Option<String> {
+    let lower = content.to_ascii_lowercase();
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let start = lower.find(&open)? + open.len();
+    let end = lower[start..].find(&close)? + start;
+    let value = content.get(start..end)?.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn extract_nfo_provider_id(content: &str) -> Option<String> {
+    if let Some(imdbid) = extract_xml_tag_value(content, "imdbid") {
+        let compact: String = imdbid
+            .chars()
+            .filter(|ch| !ch.is_ascii_whitespace())
+            .collect();
+        if compact.starts_with("tt") && compact[2..].chars().all(|ch| ch.is_ascii_digit()) {
+            return Some(format!("imdb-{compact}"));
+        }
+    }
+
+    if let Some(tmdbid) = extract_xml_tag_value(content, "tmdbid")
+        && tmdbid.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return Some(format!("tmdb-{tmdbid}"));
+    }
+
+    let lower = content.to_ascii_lowercase();
+    let mut cursor = 0;
+    while let Some(start_rel) = lower[cursor..].find("<uniqueid") {
+        let start = cursor + start_rel;
+        let Some(head_end_rel) = lower[start..].find('>') else {
+            break;
+        };
+        let head_end = start + head_end_rel;
+        let head = &lower[start..=head_end];
+        let Some(close_rel) = lower[head_end + 1..].find("</uniqueid>") else {
+            break;
+        };
+        let close = head_end + 1 + close_rel;
+        let value = content
+            .get(head_end + 1..close)
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default();
+
+        if head.contains("type=\"imdb\"") || head.contains("type='imdb'") {
+            let compact: String = value
+                .chars()
+                .filter(|ch| !ch.is_ascii_whitespace())
+                .collect();
+            if compact.starts_with("tt") && compact[2..].chars().all(|ch| ch.is_ascii_digit()) {
+                return Some(format!("imdb-{compact}"));
+            }
+        }
+
+        if head.contains("type=\"tmdb\"") || head.contains("type='tmdb'") {
+            let compact: String = value
+                .chars()
+                .filter(|ch| !ch.is_ascii_whitespace())
+                .collect();
+            if compact.chars().all(|ch| ch.is_ascii_digit()) {
+                return Some(format!("tmdb-{compact}"));
+            }
+        }
+
+        cursor = close + "</uniqueid>".len();
+    }
+
+    None
+}
+
+fn parse_year_token(value: &str) -> Option<u16> {
+    let trimmed = value.trim();
+    if trimmed.len() != 4 {
+        return None;
+    }
+    let year = trimmed.parse::<u16>().ok()?;
+    if (1900..=2100).contains(&year) {
+        Some(year)
+    } else {
+        None
+    }
 }
 
 fn parse_movie_folder_pattern(folder_name: &str) -> Option<ParsedFolderMetadata> {
@@ -3671,7 +3959,7 @@ mod tests {
         compute_rename_target, duplicate_key_for_media_path, ensure_media_file_path_allowed,
         infer_metadata_candidate, normalize_bulk_action, normalize_duplicate_key,
         normalize_filename_stem, normalize_job_status_filter, normalize_library_limit,
-        normalize_recent_limit,
+        normalize_recent_limit, rename_linked_nfo_sidecar,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -3748,7 +4036,52 @@ mod tests {
         let (target, note) = compute_rename_target(&media_path).expect("rename target computed");
         assert_eq!(target.parent(), media_path.parent());
         assert_eq!(target.extension().and_then(|v| v.to_str()), Some("mkv"));
-        assert_eq!(note, "will normalize filename");
+        assert_eq!(target.file_name().and_then(|v| v.to_str()), Some("My Movie (2024).mkv"));
+        assert_eq!(note, "will rename to title/year format");
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_prefers_nfo_title_and_year() {
+        let root = unique_temp_dir("rename-target-nfo");
+        fs::create_dir_all(&root).expect("create root");
+        let media_path = root.join("some.random.1080p.mkv");
+        fs::write(&media_path, b"x").expect("write media file");
+        fs::write(
+            root.join("some.random.1080p.nfo"),
+            "<movie><title>Actual Movie Name</title><year>2022</year></movie>",
+        )
+        .expect("write nfo");
+
+        let (target, _note) = compute_rename_target(&media_path).expect("rename target computed");
+        assert_eq!(
+            target.file_name().and_then(|v| v.to_str()),
+            Some("Actual Movie Name (2022).mkv")
+        );
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn linked_nfo_sidecar_renames_with_media_file() {
+        let root = unique_temp_dir("rename-linked-nfo");
+        fs::create_dir_all(&root).expect("create root");
+
+        let source_media = root.join("Old Name.mkv");
+        let target_media = root.join("New Name (2024).mkv");
+        let source_nfo = root.join("Old Name.nfo");
+        let target_nfo = root.join("New Name (2024).nfo");
+        let movie_nfo = root.join("movie.nfo");
+
+        fs::write(&source_media, b"x").expect("write source media");
+        fs::write(&source_nfo, "<movie><title>Old Name</title></movie>").expect("write source nfo");
+        fs::write(&movie_nfo, "<movie><title>Folder Movie</title></movie>").expect("write movie.nfo");
+
+        rename_linked_nfo_sidecar(&source_media, &target_media).expect("rename linked nfo");
+        assert!(!source_nfo.exists());
+        assert!(target_nfo.exists());
+        assert!(movie_nfo.exists());
 
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -3829,6 +4162,49 @@ mod tests {
         assert_eq!(candidate.title, "Zootopia 2");
         assert_eq!(candidate.year, Some(2025));
         assert_eq!(candidate.provider_id, "imdb-tt26443597");
+    }
+
+    #[test]
+    fn metadata_inference_prefers_nfo_when_present() {
+        let root = unique_temp_dir("nfo-metadata-priority");
+        fs::create_dir_all(&root).expect("create root");
+        let folder = root.join("Wrong Movie (2010) - [imdb-tt0000001]");
+        fs::create_dir_all(&folder).expect("create folder");
+        let media = folder.join("Wrong.Movie.2010.mkv");
+        fs::write(&media, b"x").expect("write media");
+        fs::write(
+            folder.join("Wrong.Movie.2010.nfo"),
+            "<movie><title>Correct Movie</title><year>2024</year><uniqueid type=\"imdb\">tt1234567</uniqueid></movie>",
+        )
+        .expect("write nfo");
+
+        let candidate = infer_metadata_candidate(&media, "wrong-movie-uid", None);
+        assert_eq!(candidate.title, "Correct Movie");
+        assert_eq!(candidate.year, Some(2024));
+        assert_eq!(candidate.provider_id, "imdb-tt1234567");
+        assert!(candidate.confidence >= 0.99);
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn duplicate_key_uses_nfo_metadata_when_present() {
+        let root = unique_temp_dir("nfo-duplicate-key");
+        fs::create_dir_all(&root).expect("create root");
+        let folder = root.join("Ambiguous Folder (2000)");
+        fs::create_dir_all(&folder).expect("create folder");
+        let media = folder.join("random-name.mkv");
+        fs::write(&media, b"x").expect("write media");
+        fs::write(
+            folder.join("random-name.nfo"),
+            "<movie><title>Exact Key Movie</title><year>2023</year><tmdbid>778899</tmdbid></movie>",
+        )
+        .expect("write nfo");
+
+        let key = duplicate_key_for_media_path(&media);
+        assert_eq!(key, "exact key movie|2023|tmdb-778899");
+
+        fs::remove_dir_all(root).expect("cleanup");
     }
 
     #[test]

@@ -34,10 +34,23 @@
 		total_items: number;
 		succeeded: number;
 		failed: number;
+		items: {
+			media_path: string;
+			success: boolean;
+			operation_id: string | null;
+			error: string | null;
+		}[];
+	};
+
+	type BulkRollbackResponse = {
+		total_items: number;
+		succeeded: number;
+		failed: number;
 	};
 
 	let loading = $state(false);
 	let error = $state('');
+	let notice = $state('');
 	let query = $state('');
 	let onlyMissingProvider = $state(true);
 	let maxConfidence = $state(0.95);
@@ -45,6 +58,8 @@
 	let selectedPaths = $state<string[]>([]);
 	let preview = $state<BulkDryRunResponse | null>(null);
 	let applyResult = $state<BulkApplyResponse | null>(null);
+	let rollbackResult = $state<BulkRollbackResponse | null>(null);
+	let rollbackOperationIds = $state<string[]>([]);
 	let busy = $state(false);
 
 	onMount(async () => {
@@ -77,6 +92,7 @@
 		selectedPaths = selectedPaths.filter((path) => items.some((item) => item.media_path === path));
 		preview = null;
 		applyResult = null;
+		rollbackResult = null;
 		loading = false;
 	}
 
@@ -145,7 +161,9 @@
 
 		busy = true;
 		error = '';
+		notice = '';
 		applyResult = null;
+		rollbackResult = null;
 		const response = await apiFetch('/api/bulk/dry-run', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
@@ -176,6 +194,8 @@
 
 		busy = true;
 		error = '';
+		notice = '';
+		rollbackResult = null;
 		const response = await apiFetch('/api/bulk/apply', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
@@ -192,6 +212,39 @@
 		}
 
 		applyResult = (await response.json()) as BulkApplyResponse;
+		rollbackOperationIds = applyResult.items
+			.filter((item) => item.success && !!item.operation_id)
+			.map((item) => item.operation_id as string);
+		notice = `Metadata apply complete (ok=${applyResult.succeeded}, fail=${applyResult.failed}). Rollback-ready=${rollbackOperationIds.length}`;
+		busy = false;
+		await refresh();
+	}
+
+	async function rollbackLastApply() {
+		if (rollbackOperationIds.length === 0) {
+			error = 'No rollback operations are available from the last apply.';
+			return;
+		}
+
+		busy = true;
+		error = '';
+		notice = '';
+		const response = await apiFetch('/api/bulk/rollback', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ operation_ids: rollbackOperationIds })
+		});
+		if (!response.ok) {
+			error = await response.text();
+			busy = false;
+			return;
+		}
+
+		rollbackResult = (await response.json()) as BulkRollbackResponse;
+		notice = `Rollback finished (ok=${rollbackResult.succeeded}, fail=${rollbackResult.failed}).`;
+		if (rollbackResult.failed === 0) {
+			rollbackOperationIds = [];
+		}
 		busy = false;
 		await refresh();
 	}
@@ -231,15 +284,22 @@
 			<button type="button" onclick={clearSelection} disabled={loading || selectedPaths.length === 0}>Clear</button>
 			<button type="button" onclick={runPreview} disabled={busy || selectedPaths.length === 0}>Preview Apply</button>
 			<button type="button" onclick={applyPreview} disabled={busy || !preview || !preview.plan_ready}>Apply Preview</button>
+			<button type="button" onclick={rollbackLastApply} disabled={busy || rollbackOperationIds.length === 0}>Rollback Last Apply</button>
 			<a class="library-link" href="/library">Open Library Bulk Editor</a>
 		</div>
 
 		<p class="mono">selected={selectedPaths.length}</p>
+		{#if notice}
+			<p class="mono">{notice}</p>
+		{/if}
 		{#if preview}
 			<p class="mono">preview batch={preview.batch_hash} total={preview.total_items} creates={preview.summary.creates} updates={preview.summary.updates} invalid={preview.summary.invalid}</p>
 		{/if}
 		{#if applyResult}
 			<p class="mono">applied total={applyResult.total_items} ok={applyResult.succeeded} fail={applyResult.failed}</p>
+		{/if}
+		{#if rollbackResult}
+			<p class="mono">rollback total={rollbackResult.total_items} ok={rollbackResult.succeeded} fail={rollbackResult.failed}</p>
 		{/if}
 
 		{#if error}
