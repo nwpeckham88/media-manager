@@ -58,12 +58,19 @@ type OperationEvent = {
 type JobRecord = {
 	id: number;
 	kind: string;
-	status: 'running' | 'succeeded' | 'failed';
+	status: 'running' | 'succeeded' | 'failed' | 'canceled';
 	created_at_ms: number;
 	updated_at_ms: number;
 	payload_json: string;
 	result_json: string | null;
 	error: string | null;
+};
+
+type RecentJobsResponse = {
+	total_count: number;
+	offset: number;
+	limit: number;
+	items: JobRecord[];
 };
 
 type PreflightReport = {
@@ -91,7 +98,7 @@ export const load: PageLoad = async ({ fetch }) => {
 		readJson<ScanSummary>(fetch, '/api/scan/summary'),
 		readJson<AppConfig>(fetch, '/api/config/app'),
 		readJson<OperationEvent[]>(fetch, '/api/operations/recent?limit=12'),
-		readJson<JobRecord[]>(fetch, '/api/jobs/recent?limit=12')
+		readJson<RecentJobsResponse>(fetch, '/api/jobs/recent?limit=12')
 	]);
 
 	return {

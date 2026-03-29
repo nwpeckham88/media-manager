@@ -26,8 +26,9 @@ mod tests {
         fs::write(&media, b"x").expect("write media file");
 
         let dry_run = sidecar_workflow::build_plan(&media, "movie-1").expect("build plan");
-        let applied = sidecar_workflow::apply_plan(&media, "movie-1", &dry_run.plan_hash, &state_dir)
-            .expect("apply plan");
+        let applied =
+            sidecar_workflow::apply_plan(&media, "movie-1", &dry_run.plan_hash, &state_dir)
+                .expect("apply plan");
 
         let sidecar_content = fs::read_to_string(media_dir.join(".mm.json")).expect("read sidecar");
         assert!(sidecar_content.contains("movie-1"));
@@ -37,7 +38,12 @@ mod tests {
         assert!(rollback.restored);
 
         assert!(!media_dir.join(".mm.json").exists());
-        assert!(!state_dir.join("rollback").join(format!("{}.json", applied.operation_id)).exists());
+        assert!(
+            !state_dir
+                .join("rollback")
+                .join(format!("{}.json", applied.operation_id))
+                .exists()
+        );
 
         fs::remove_dir_all(root).expect("cleanup test directory");
     }
@@ -56,12 +62,17 @@ mod tests {
         sidecar_workflow::apply_plan(&media, "movie-1", &first_plan.plan_hash, &state_dir)
             .expect("apply first plan");
 
-        let second_plan = sidecar_workflow::build_plan(&media, "movie-2").expect("build second plan");
-        assert!(matches!(second_plan.action, sidecar_workflow::SidecarPlanAction::Update));
+        let second_plan =
+            sidecar_workflow::build_plan(&media, "movie-2").expect("build second plan");
+        assert!(matches!(
+            second_plan.action,
+            sidecar_workflow::SidecarPlanAction::Update
+        ));
         assert_eq!(second_plan.next_state.item_uid, "movie-2");
 
-        let applied = sidecar_workflow::apply_plan(&media, "movie-2", &second_plan.plan_hash, &state_dir)
-            .expect("apply second plan");
+        let applied =
+            sidecar_workflow::apply_plan(&media, "movie-2", &second_plan.plan_hash, &state_dir)
+                .expect("apply second plan");
         assert_eq!(applied.applied_state.item_uid, "movie-2");
 
         let sidecar_content = fs::read_to_string(media_dir.join(".mm.json")).expect("read sidecar");

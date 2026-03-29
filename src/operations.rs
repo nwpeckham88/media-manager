@@ -10,6 +10,8 @@ const MAX_EVENTS: usize = 500;
 #[serde(rename_all = "snake_case")]
 pub enum OperationKind {
     ScanSummary,
+    LibraryBrowse,
+    JobControl,
     SidecarRead,
     SidecarUpsert,
 }
@@ -18,6 +20,8 @@ impl OperationKind {
     pub fn as_str(&self) -> &'static str {
         match self {
             OperationKind::ScanSummary => "scan_summary",
+            OperationKind::LibraryBrowse => "library_browse",
+            OperationKind::JobControl => "job_control",
             OperationKind::SidecarRead => "sidecar_read",
             OperationKind::SidecarUpsert => "sidecar_upsert",
         }
@@ -26,6 +30,8 @@ impl OperationKind {
     pub fn from_db_str(value: &str) -> Self {
         match value {
             "scan_summary" => OperationKind::ScanSummary,
+            "library_browse" => OperationKind::LibraryBrowse,
+            "job_control" => OperationKind::JobControl,
             "sidecar_read" => OperationKind::SidecarRead,
             "sidecar_upsert" => OperationKind::SidecarUpsert,
             _ => OperationKind::SidecarRead,

@@ -29,14 +29,14 @@ impl AppConfig {
             branding: BrandingConfig {
                 app_name: env::var("MM_BRANDING_APP_NAME")
                     .unwrap_or_else(|_| "Media Manager".to_string()),
-                short_name: env::var("MM_BRANDING_SHORT_NAME")
-                    .unwrap_or_else(|_| "MM".to_string()),
+                short_name: env::var("MM_BRANDING_SHORT_NAME").unwrap_or_else(|_| "MM".to_string()),
                 logo_url: env::var("MM_BRANDING_LOGO_URL")
                     .unwrap_or_else(|_| "/assets/logo.svg".to_string()),
                 browser_title_template: env::var("MM_BRANDING_BROWSER_TITLE_TEMPLATE")
                     .unwrap_or_else(|_| "{app_name}".to_string()),
                 theme_tokens: BrandingThemeTokens {
-                    accent: env::var("MM_BRANDING_ACCENT").unwrap_or_else(|_| "#0f766e".to_string()),
+                    accent: env::var("MM_BRANDING_ACCENT")
+                        .unwrap_or_else(|_| "#0f766e".to_string()),
                     accent_contrast: env::var("MM_BRANDING_ACCENT_CONTRAST")
                         .unwrap_or_else(|_| "#f8fafc".to_string()),
                 },
@@ -48,7 +48,9 @@ impl AppConfig {
             },
             library_roots: env_paths("MM_LIBRARY_ROOTS"),
             state_dir: state_dir.clone(),
-            api_token: env::var("MM_API_TOKEN").ok().filter(|v| !v.trim().is_empty()),
+            api_token: env::var("MM_API_TOKEN")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
             audit_db_path: env_path("MM_AUDIT_DB_PATH")
                 .unwrap_or_else(|| state_dir.join("audit.sqlite3")),
         }

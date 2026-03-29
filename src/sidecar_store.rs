@@ -34,7 +34,10 @@ pub fn sidecar_path_for_media(media_path: &Path) -> Result<PathBuf, SidecarStore
     }
 
     let parent = media_path.parent().ok_or_else(|| {
-        SidecarStoreError::InvalidPath(format!("cannot resolve parent for {}", media_path.display()))
+        SidecarStoreError::InvalidPath(format!(
+            "cannot resolve parent for {}",
+            media_path.display()
+        ))
     })?;
 
     Ok(parent.join(SIDECAR_FILENAME))
@@ -58,7 +61,10 @@ pub fn read_sidecar_at_path(path: &Path) -> Result<Option<SidecarState>, Sidecar
     Ok(Some(state))
 }
 
-pub fn write_sidecar(media_path: &Path, state: &SidecarState) -> Result<PathBuf, SidecarStoreError> {
+pub fn write_sidecar(
+    media_path: &Path,
+    state: &SidecarState,
+) -> Result<PathBuf, SidecarStoreError> {
     let path = sidecar_path_for_media(media_path)?;
     write_sidecar_at_path(&path, state)?;
     Ok(path)
@@ -69,18 +75,26 @@ pub fn write_sidecar_at_path(path: &Path, state: &SidecarState) -> Result<(), Si
         SidecarStoreError::InvalidPath(format!("cannot resolve parent for {}", path.display()))
     })?;
 
-    fs::create_dir_all(parent)
-        .map_err(|e| SidecarStoreError::WriteFailed(format!("create_dir_all {} ({})", parent.display(), e)))?;
+    fs::create_dir_all(parent).map_err(|e| {
+        SidecarStoreError::WriteFailed(format!("create_dir_all {} ({})", parent.display(), e))
+    })?;
 
     let serialized = serde_json::to_string_pretty(state)
         .map_err(|e| SidecarStoreError::EncodeFailed(e.to_string()))?;
 
     let temp_path = unique_sidecar_temp_path(path);
-    fs::write(&temp_path, serialized)
-        .map_err(|e| SidecarStoreError::WriteFailed(format!("write {} ({})", temp_path.display(), e)))?;
+    fs::write(&temp_path, serialized).map_err(|e| {
+        SidecarStoreError::WriteFailed(format!("write {} ({})", temp_path.display(), e))
+    })?;
 
-    fs::rename(&temp_path, &path)
-        .map_err(|e| SidecarStoreError::WriteFailed(format!("rename {} -> {} ({})", temp_path.display(), path.display(), e)))?;
+    fs::rename(&temp_path, &path).map_err(|e| {
+        SidecarStoreError::WriteFailed(format!(
+            "rename {} -> {} ({})",
+            temp_path.display(),
+            path.display(),
+            e
+        ))
+    })?;
 
     Ok(())
 }
@@ -100,7 +114,12 @@ fn unique_sidecar_temp_path(path: &Path) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    path.with_extension(format!("json.tmp.{}.{}.{}", std::process::id(), now_ms, nonce))
+    path.with_extension(format!(
+        "json.tmp.{}.{}.{}",
+        std::process::id(),
+        now_ms,
+        nonce
+    ))
 }
 
 #[cfg(test)]

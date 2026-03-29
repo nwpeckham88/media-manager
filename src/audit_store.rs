@@ -29,7 +29,10 @@ impl AuditStore {
     }
 
     pub fn insert_event(&self, event: &OperationEvent) -> Result<(), AuditStoreError> {
-        let lock = self.conn.lock().map_err(|_| AuditStoreError::LockPoisoned)?;
+        let lock = self
+            .conn
+            .lock()
+            .map_err(|_| AuditStoreError::LockPoisoned)?;
         lock.execute(
             "INSERT INTO operation_events(timestamp_ms, kind, detail, success) VALUES (?1, ?2, ?3, ?4)",
             params![
@@ -45,7 +48,10 @@ impl AuditStore {
     }
 
     pub fn recent_events(&self, limit: usize) -> Result<Vec<OperationEvent>, AuditStoreError> {
-        let lock = self.conn.lock().map_err(|_| AuditStoreError::LockPoisoned)?;
+        let lock = self
+            .conn
+            .lock()
+            .map_err(|_| AuditStoreError::LockPoisoned)?;
         let mut stmt = lock
             .prepare(
                 "SELECT timestamp_ms, kind, detail, success

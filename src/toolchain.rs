@@ -35,8 +35,16 @@ pub enum ToolchainError {
 }
 
 pub fn probe_toolchain(config: &ToolchainConfig) -> Result<ToolchainSnapshot, ToolchainError> {
-    let ffmpeg = resolve_required_binary("ffmpeg", &config.ffmpeg_path, &["jellyfin-ffmpeg", "ffmpeg"])?;
-    let ffprobe = resolve_required_binary("ffprobe", &config.ffprobe_path, &["jellyfin-ffprobe", "ffprobe"])?;
+    let ffmpeg = resolve_required_binary(
+        "ffmpeg",
+        &config.ffmpeg_path,
+        &["jellyfin-ffmpeg", "ffmpeg"],
+    )?;
+    let ffprobe = resolve_required_binary(
+        "ffprobe",
+        &config.ffprobe_path,
+        &["jellyfin-ffprobe", "ffprobe"],
+    )?;
     let mediainfo = resolve_optional_binary("mediainfo", &config.mediainfo_path, &["mediainfo"]);
 
     Ok(ToolchainSnapshot {

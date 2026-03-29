@@ -169,27 +169,42 @@ fn write_rollback_snapshot(
     snapshot: &RollbackSnapshot,
 ) -> Result<(), SidecarWorkflowError> {
     let path = rollback_snapshot_path(state_dir, &snapshot.operation_id);
-    let parent = path
-        .parent()
-        .ok_or_else(|| SidecarWorkflowError::RollbackSnapshotWrite("invalid rollback path".to_string()))?;
+    let parent = path.parent().ok_or_else(|| {
+        SidecarWorkflowError::RollbackSnapshotWrite("invalid rollback path".to_string())
+    })?;
 
-    fs::create_dir_all(parent)
-        .map_err(|e| SidecarWorkflowError::RollbackSnapshotWrite(format!("create {} ({})", parent.display(), e)))?;
+    fs::create_dir_all(parent).map_err(|e| {
+        SidecarWorkflowError::RollbackSnapshotWrite(format!("create {} ({})", parent.display(), e))
+    })?;
 
     let content = serde_json::to_string_pretty(snapshot)
         .map_err(|e| SidecarWorkflowError::RollbackSnapshotEncode(e.to_string()))?;
 
     let temp_path = unique_snapshot_temp_path(&path);
-    fs::write(&temp_path, content)
-        .map_err(|e| SidecarWorkflowError::RollbackSnapshotWrite(format!("write {} ({})", temp_path.display(), e)))?;
+    fs::write(&temp_path, content).map_err(|e| {
+        SidecarWorkflowError::RollbackSnapshotWrite(format!(
+            "write {} ({})",
+            temp_path.display(),
+            e
+        ))
+    })?;
 
-    fs::rename(&temp_path, &path)
-        .map_err(|e| SidecarWorkflowError::RollbackSnapshotWrite(format!("rename {} -> {} ({})", temp_path.display(), path.display(), e)))?;
+    fs::rename(&temp_path, &path).map_err(|e| {
+        SidecarWorkflowError::RollbackSnapshotWrite(format!(
+            "rename {} -> {} ({})",
+            temp_path.display(),
+            path.display(),
+            e
+        ))
+    })?;
 
     Ok(())
 }
 
-fn read_rollback_snapshot(state_dir: &Path, operation_id: &str) -> Result<RollbackSnapshot, SidecarWorkflowError> {
+fn read_rollback_snapshot(
+    state_dir: &Path,
+    operation_id: &str,
+) -> Result<RollbackSnapshot, SidecarWorkflowError> {
     let path = rollback_snapshot_path(state_dir, operation_id);
     if !path.exists() {
         return Err(SidecarWorkflowError::RollbackSnapshotMissing(
@@ -197,14 +212,19 @@ fn read_rollback_snapshot(state_dir: &Path, operation_id: &str) -> Result<Rollba
         ));
     }
 
-    let content = fs::read_to_string(&path)
-        .map_err(|e| SidecarWorkflowError::RollbackSnapshotDecode(format!("read {} ({})", path.display(), e)))?;
+    let content = fs::read_to_string(&path).map_err(|e| {
+        SidecarWorkflowError::RollbackSnapshotDecode(format!("read {} ({})", path.display(), e))
+    })?;
 
-    serde_json::from_str::<RollbackSnapshot>(&content)
-        .map_err(|e| SidecarWorkflowError::RollbackSnapshotDecode(format!("decode {} ({})", path.display(), e)))
+    serde_json::from_str::<RollbackSnapshot>(&content).map_err(|e| {
+        SidecarWorkflowError::RollbackSnapshotDecode(format!("decode {} ({})", path.display(), e))
+    })
 }
 
-fn delete_rollback_snapshot(state_dir: &Path, operation_id: &str) -> Result<(), SidecarWorkflowError> {
+fn delete_rollback_snapshot(
+    state_dir: &Path,
+    operation_id: &str,
+) -> Result<(), SidecarWorkflowError> {
     let path = rollback_snapshot_path(state_dir, operation_id);
     if !path.exists() {
         return Ok(());
@@ -220,7 +240,8 @@ fn hash_plan(
     existing_state: &Option<SidecarState>,
     next_state: &SidecarState,
 ) -> String {
-    let existing_json = serde_json::to_string(existing_state).unwrap_or_else(|_| "null".to_string());
+    let existing_json =
+        serde_json::to_string(existing_state).unwrap_or_else(|_| "null".to_string());
     let next_json = serde_json::to_string(next_state).unwrap_or_else(|_| "null".to_string());
 
     let mut hasher = DefaultHasher::new();

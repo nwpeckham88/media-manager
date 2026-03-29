@@ -19,11 +19,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::response::Html;
-use axum::routing::get;
-use axum::Router;
 use api::routes::{AppState, router};
 use audit_store::AuditStore;
+use axum::Router;
+use axum::response::Html;
+use axum::routing::get;
 use jobs_store::JobsStore;
 use operations::OperationLog;
 use tokio::net::TcpListener;
@@ -50,7 +50,10 @@ async fn main() {
     };
 
     if let Err(err) = std::fs::create_dir_all(&config.state_dir) {
-        error!("failed to create state dir {}: {err}", config.state_dir.display());
+        error!(
+            "failed to create state dir {}: {err}",
+            config.state_dir.display()
+        );
         std::process::exit(1);
     }
 

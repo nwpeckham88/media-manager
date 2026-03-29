@@ -34,6 +34,11 @@
 </svelte:head>
 
 <div class="theme-wrap">
+	<nav class="main-nav" aria-label="Primary">
+		<a href="/">Dashboard</a>
+		<a href="/library">Library</a>
+		<a href="/queue">Queue</a>
+	</nav>
 	<button class="theme-toggle" type="button" onclick={toggleTheme}>
 		Theme: {theme}
 	</button>
@@ -47,7 +52,22 @@
 		top: 0.6rem;
 		z-index: 20;
 		display: flex;
-		justify-content: flex-end;
+		justify-content: space-between;
+		align-items: center;
 		padding: 0.8rem 1rem 0;
+	}
+
+	.main-nav {
+		display: flex;
+		gap: 0.7rem;
+	}
+
+	.main-nav a {
+		padding: 0.4rem 0.75rem;
+		border-radius: 999px;
+		text-decoration: none;
+		font-weight: 600;
+		background: color-mix(in srgb, var(--card) 86%, transparent);
+		border: 1px solid var(--ring);
 	}
 </style>

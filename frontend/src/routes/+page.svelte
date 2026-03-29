@@ -35,12 +35,19 @@
 	type JobRecord = {
 		id: number;
 		kind: string;
-		status: 'running' | 'succeeded' | 'failed';
+		status: 'running' | 'succeeded' | 'failed' | 'canceled';
 		created_at_ms: number;
 		updated_at_ms: number;
 		payload_json: string;
 		result_json: string | null;
 		error: string | null;
+	};
+
+	type RecentJobsResponse = {
+		total_count: number;
+		offset: number;
+		limit: number;
+		items: JobRecord[];
 	};
 
 	let mediaPath = $state('');
@@ -64,7 +71,7 @@
 		}
 
 		if (data.recentJobs.ok && data.recentJobs.data) {
-			jobs = data.recentJobs.data;
+			jobs = data.recentJobs.data.items;
 		}
 	});
 
@@ -168,7 +175,8 @@
 		if (!response.ok) {
 			return;
 		}
-		jobs = (await response.json()) as JobRecord[];
+		const payload = (await response.json()) as RecentJobsResponse;
+		jobs = payload.items;
 	}
 
 	function saveToken() {
@@ -203,6 +211,7 @@
 		<p class="lead">
 			Phase-one dashboard showing runtime branding config and media toolchain diagnostics from the Rust API.
 		</p>
+		<p><a class="hero-link" href="/library">Open Library Workspace</a></p>
 		<p class="stamp mono">Loaded at {data.loadedAt}</p>
 	</section>
 
@@ -564,5 +573,15 @@
 			opacity: 1;
 			transform: translateY(0);
 		}
+	}
+
+	.hero-link {
+		display: inline-flex;
+		padding: 0.5rem 0.9rem;
+		border-radius: 999px;
+		border: 1px solid var(--ring);
+		background: color-mix(in srgb, var(--accent) 25%, transparent);
+		text-decoration: none;
+		font-weight: 700;
 	}
 </style>

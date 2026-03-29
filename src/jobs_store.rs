@@ -24,6 +24,7 @@ pub enum JobStatus {
     Running,
     Succeeded,
     Failed,
+    Canceled,
 }
 
 impl JobStatus {
@@ -32,6 +33,7 @@ impl JobStatus {
             JobStatus::Running => "running",
             JobStatus::Succeeded => "succeeded",
             JobStatus::Failed => "failed",
+            JobStatus::Canceled => "canceled",
         }
     }
 
@@ -39,6 +41,7 @@ impl JobStatus {
         match v {
             "succeeded" => JobStatus::Succeeded,
             "failed" => JobStatus::Failed,
+            "canceled" => JobStatus::Canceled,
             _ => JobStatus::Running,
         }
     }
@@ -65,7 +68,12 @@ impl JobsStore {
         })
     }
 
-    pub fn create_job(&self, kind: &str, payload_json: &str, now_ms: u128) -> Result<i64, JobsStoreError> {
+    pub fn create_job(
+        &self,
+        kind: &str,
+        payload_json: &str,
+        now_ms: u128,
+    ) -> Result<i64, JobsStoreError> {
         let lock = self.conn.lock().map_err(|_| JobsStoreError::LockPoisoned)?;
         lock.execute(
             "INSERT INTO jobs(kind, status, created_at_ms, updated_at_ms, payload_json) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -92,19 +100,52 @@ impl JobsStore {
         Ok(())
     }
 
-    pub fn recent_jobs(&self, limit: usize) -> Result<Vec<JobRecord>, JobsStoreError> {
+    pub fn recent_jobs_filtered(
+        &self,
+        status: Option<&str>,
+        kind_like: Option<&str>,
+        bulk_only: bool,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<JobRecord>, JobsStoreError> {
         let lock = self.conn.lock().map_err(|_| JobsStoreError::LockPoisoned)?;
+        let mut sql = String::from(
+            "SELECT id, kind, status, created_at_ms, updated_at_ms, payload_json, result_json, error
+                 FROM jobs",
+        );
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<rusqlite::types::Value> = Vec::new();
+
+        if let Some(status_value) = status {
+            conditions.push("status = ?".to_string());
+            params.push(rusqlite::types::Value::Text(status_value.to_string()));
+        }
+
+        if let Some(kind_value) = kind_like {
+            conditions.push("kind LIKE ?".to_string());
+            params.push(rusqlite::types::Value::Text(format!("%{kind_value}%")));
+        }
+
+        if bulk_only {
+            conditions.push("kind LIKE ?".to_string());
+            params.push(rusqlite::types::Value::Text("bulk_%".to_string()));
+        }
+
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+
+        sql.push_str(" ORDER BY id DESC LIMIT ? OFFSET ?");
+        params.push(rusqlite::types::Value::Integer(limit as i64));
+        params.push(rusqlite::types::Value::Integer(offset as i64));
+
         let mut stmt = lock
-            .prepare(
-                "SELECT id, kind, status, created_at_ms, updated_at_ms, payload_json, result_json, error
-                 FROM jobs
-                 ORDER BY id DESC
-                 LIMIT ?1",
-            )
+            .prepare(&sql)
             .map_err(|e| JobsStoreError::Sql(e.to_string()))?;
 
         let rows = stmt
-            .query_map([limit as i64], |row| {
+            .query_map(rusqlite::params_from_iter(params), |row| {
                 let status: String = row.get(2)?;
                 Ok(JobRecord {
                     id: row.get(0)?,
@@ -124,5 +165,102 @@ impl JobsStore {
             jobs.push(row.map_err(|e| JobsStoreError::Sql(e.to_string()))?);
         }
         Ok(jobs)
+    }
+
+    pub fn count_jobs_filtered(
+        &self,
+        status: Option<&str>,
+        kind_like: Option<&str>,
+        bulk_only: bool,
+    ) -> Result<usize, JobsStoreError> {
+        let lock = self.conn.lock().map_err(|_| JobsStoreError::LockPoisoned)?;
+        let mut sql = String::from("SELECT COUNT(*) FROM jobs");
+        let mut conditions: Vec<String> = Vec::new();
+        let mut params: Vec<rusqlite::types::Value> = Vec::new();
+
+        if let Some(status_value) = status {
+            conditions.push("status = ?".to_string());
+            params.push(rusqlite::types::Value::Text(status_value.to_string()));
+        }
+
+        if let Some(kind_value) = kind_like {
+            conditions.push("kind LIKE ?".to_string());
+            params.push(rusqlite::types::Value::Text(format!("%{kind_value}%")));
+        }
+
+        if bulk_only {
+            conditions.push("kind LIKE ?".to_string());
+            params.push(rusqlite::types::Value::Text("bulk_%".to_string()));
+        }
+
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+
+        let mut stmt = lock
+            .prepare(&sql)
+            .map_err(|e| JobsStoreError::Sql(e.to_string()))?;
+        let count: i64 = stmt
+            .query_row(rusqlite::params_from_iter(params), |row| row.get(0))
+            .map_err(|e| JobsStoreError::Sql(e.to_string()))?;
+
+        Ok(count.max(0) as usize)
+    }
+
+    pub fn get_job(&self, id: i64) -> Result<Option<JobRecord>, JobsStoreError> {
+        let lock = self.conn.lock().map_err(|_| JobsStoreError::LockPoisoned)?;
+        let mut stmt = lock
+            .prepare(
+                "SELECT id, kind, status, created_at_ms, updated_at_ms, payload_json, result_json, error
+                 FROM jobs
+                 WHERE id = ?1",
+            )
+            .map_err(|e| JobsStoreError::Sql(e.to_string()))?;
+
+        let mut rows = stmt
+            .query([id])
+            .map_err(|e| JobsStoreError::Sql(e.to_string()))?;
+
+        let Some(row) = rows
+            .next()
+            .map_err(|e| JobsStoreError::Sql(e.to_string()))?
+        else {
+            return Ok(None);
+        };
+
+        let status: String = row.get(2).map_err(|e| JobsStoreError::Sql(e.to_string()))?;
+        Ok(Some(JobRecord {
+            id: row.get(0).map_err(|e| JobsStoreError::Sql(e.to_string()))?,
+            kind: row.get(1).map_err(|e| JobsStoreError::Sql(e.to_string()))?,
+            status: JobStatus::from_str(&status),
+            created_at_ms: row
+                .get::<_, i64>(3)
+                .map_err(|e| JobsStoreError::Sql(e.to_string()))?
+                as u128,
+            updated_at_ms: row
+                .get::<_, i64>(4)
+                .map_err(|e| JobsStoreError::Sql(e.to_string()))?
+                as u128,
+            payload_json: row.get(5).map_err(|e| JobsStoreError::Sql(e.to_string()))?,
+            result_json: row.get(6).map_err(|e| JobsStoreError::Sql(e.to_string()))?,
+            error: row.get(7).map_err(|e| JobsStoreError::Sql(e.to_string()))?,
+        }))
+    }
+
+    pub fn set_job_status(
+        &self,
+        id: i64,
+        status: JobStatus,
+        error: Option<&str>,
+        now_ms: u128,
+    ) -> Result<(), JobsStoreError> {
+        let lock = self.conn.lock().map_err(|_| JobsStoreError::LockPoisoned)?;
+        lock.execute(
+            "UPDATE jobs SET status = ?1, updated_at_ms = ?2, error = ?3 WHERE id = ?4",
+            params![status.as_str(), now_ms as i64, error, id],
+        )
+        .map_err(|e| JobsStoreError::Sql(e.to_string()))?;
+        Ok(())
     }
 }

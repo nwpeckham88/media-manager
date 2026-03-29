@@ -129,9 +129,11 @@ mod tests {
 
         let conn = Connection::open(&db_path).expect("open db");
         let version: i64 = conn
-            .query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |r| r.get(0),
+            )
             .expect("read version");
         assert_eq!(version, LATEST_SCHEMA_VERSION);
 
@@ -174,14 +176,18 @@ mod tests {
 
         let conn = Connection::open(&db_path).expect("open db after migration");
         let version: i64 = conn
-            .query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+                [],
+                |r| r.get(0),
+            )
             .expect("read version");
         assert_eq!(version, LATEST_SCHEMA_VERSION);
 
         let legacy_row_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM jobs WHERE kind='legacy'", [], |r| r.get(0))
+            .query_row("SELECT COUNT(*) FROM jobs WHERE kind='legacy'", [], |r| {
+                r.get(0)
+            })
             .expect("read legacy jobs");
         assert_eq!(legacy_row_count, 1);
 
