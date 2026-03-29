@@ -12,9 +12,31 @@
 		items: FormattingCandidateItem[];
 	};
 
+	type BulkDryRunResponse = {
+		batch_hash: string;
+		total_items: number;
+		plan_ready: boolean;
+		summary: {
+			creates: number;
+			updates: number;
+			noops: number;
+			invalid: number;
+		};
+	};
+
+	type BulkApplyResponse = {
+		total_items: number;
+		succeeded: number;
+		failed: number;
+	};
+
 	let loading = $state(false);
 	let error = $state('');
 	let items = $state<FormattingCandidateItem[]>([]);
+	let selectedPaths = $state<string[]>([]);
+	let busy = $state(false);
+	let preview = $state<BulkDryRunResponse | null>(null);
+	let applyResult = $state<BulkApplyResponse | null>(null);
 
 	onMount(async () => {
 		await refresh();
@@ -32,7 +54,102 @@
 
 		const payload = (await response.json()) as FormattingCandidatesResponse;
 		items = payload.items;
+		selectedPaths = selectedPaths.filter((path) => items.some((item) => item.media_path === path));
+		preview = null;
+		applyResult = null;
 		loading = false;
+	}
+
+	function isSelected(mediaPath: string): boolean {
+		return selectedPaths.includes(mediaPath);
+	}
+
+	function toggleSelection(mediaPath: string) {
+		if (isSelected(mediaPath)) {
+			selectedPaths = selectedPaths.filter((path) => path !== mediaPath);
+		} else {
+			selectedPaths = [...selectedPaths, mediaPath];
+		}
+		preview = null;
+	}
+
+	function selectAll() {
+		selectedPaths = items.map((item) => item.media_path);
+		preview = null;
+	}
+
+	function clearSelection() {
+		selectedPaths = [];
+		preview = null;
+	}
+
+	function buildPayload() {
+		return selectedPaths.map((mediaPath) => {
+			const file = mediaPath.split('/').pop() ?? mediaPath;
+			return {
+				media_path: mediaPath,
+				item_uid: file.replace(/\.[^.]+$/, '')
+			};
+		});
+	}
+
+	async function runPreview() {
+		if (selectedPaths.length === 0) {
+			error = 'Select at least one candidate first.';
+			return;
+		}
+
+		busy = true;
+		error = '';
+		applyResult = null;
+		const response = await apiFetch('/api/bulk/dry-run', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				action: 'rename',
+				items: buildPayload()
+			})
+		});
+		if (!response.ok) {
+			error = await response.text();
+			busy = false;
+			return;
+		}
+
+		preview = (await response.json()) as BulkDryRunResponse;
+		busy = false;
+	}
+
+	async function applyPreview() {
+		if (!preview) {
+			error = 'Run preview first.';
+			return;
+		}
+		if (!preview.plan_ready) {
+			error = 'Preview has invalid items. Resolve before apply.';
+			return;
+		}
+
+		busy = true;
+		error = '';
+		const response = await apiFetch('/api/bulk/apply', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				action: 'rename',
+				approved_batch_hash: preview.batch_hash,
+				items: buildPayload()
+			})
+		});
+		if (!response.ok) {
+			error = await response.text();
+			busy = false;
+			return;
+		}
+
+		applyResult = (await response.json()) as BulkApplyResponse;
+		busy = false;
+		await refresh();
 	}
 
 	async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -63,8 +180,20 @@
 	<section class="card">
 		<div class="actions">
 			<button type="button" onclick={refresh} disabled={loading}>Refresh</button>
+			<button type="button" onclick={selectAll} disabled={loading || items.length === 0}>Select All</button>
+			<button type="button" onclick={clearSelection} disabled={loading || selectedPaths.length === 0}>Clear</button>
+			<button type="button" onclick={runPreview} disabled={busy || selectedPaths.length === 0}>Preview Rename</button>
+			<button type="button" onclick={applyPreview} disabled={busy || !preview || !preview.plan_ready}>Apply Rename</button>
 			<a class="library-link" href="/library">Open Library Rename/NFO Actions</a>
 		</div>
+
+		<p class="mono">selected={selectedPaths.length}</p>
+		{#if preview}
+			<p class="mono">preview batch={preview.batch_hash} total={preview.total_items} invalid={preview.summary.invalid}</p>
+		{/if}
+		{#if applyResult}
+			<p class="mono">applied total={applyResult.total_items} ok={applyResult.succeeded} fail={applyResult.failed}</p>
+		{/if}
 
 		{#if error}
 			<p class="error">{error}</p>
@@ -79,6 +208,7 @@
 				<table class="mono">
 					<thead>
 						<tr>
+							<th>Select</th>
 							<th>Current Path</th>
 							<th>Proposed Path</th>
 							<th>Note</th>
@@ -87,6 +217,7 @@
 					<tbody>
 						{#each items as item}
 							<tr>
+								<td><input type="checkbox" checked={isSelected(item.media_path)} onchange={() => toggleSelection(item.media_path)} /></td>
 								<td>{item.media_path}</td>
 								<td>{item.proposed_media_path}</td>
 								<td>{item.note}</td>

@@ -14,12 +14,38 @@
 		items: IndexedMediaItem[];
 	};
 
+	type BulkAction = 'metadata_lookup';
+
+	type BulkDryRunResponse = {
+		action: BulkAction;
+		batch_hash: string;
+		total_items: number;
+		plan_ready: boolean;
+		summary: {
+			creates: number;
+			updates: number;
+			noops: number;
+			invalid: number;
+		};
+	};
+
+	type BulkApplyResponse = {
+		action: BulkAction;
+		total_items: number;
+		succeeded: number;
+		failed: number;
+	};
+
 	let loading = $state(false);
 	let error = $state('');
 	let query = $state('');
 	let onlyMissingProvider = $state(true);
 	let maxConfidence = $state(0.95);
 	let items = $state<IndexedMediaItem[]>([]);
+	let selectedPaths = $state<string[]>([]);
+	let preview = $state<BulkDryRunResponse | null>(null);
+	let applyResult = $state<BulkApplyResponse | null>(null);
+	let busy = $state(false);
 
 	onMount(async () => {
 		await refresh();
@@ -48,7 +74,126 @@
 
 		const payload = (await response.json()) as IndexItemsResponse;
 		items = payload.items;
+		selectedPaths = selectedPaths.filter((path) => items.some((item) => item.media_path === path));
+		preview = null;
+		applyResult = null;
 		loading = false;
+	}
+
+	function isSelected(mediaPath: string): boolean {
+		return selectedPaths.includes(mediaPath);
+	}
+
+	function toggleSelection(mediaPath: string) {
+		if (isSelected(mediaPath)) {
+			selectedPaths = selectedPaths.filter((path) => path !== mediaPath);
+		} else {
+			selectedPaths = [...selectedPaths, mediaPath];
+		}
+		preview = null;
+	}
+
+	function selectAll() {
+		selectedPaths = items.map((item) => item.media_path);
+		preview = null;
+	}
+
+	function clearSelection() {
+		selectedPaths = [];
+		preview = null;
+	}
+
+	function deriveUid(item: IndexedMediaItem): string {
+		const fromTitle = (item.parsed_title ?? '').trim();
+		if (fromTitle.length > 0) {
+			const yearSuffix = item.parsed_year ? `-${item.parsed_year}` : '';
+			return `${fromTitle.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}${yearSuffix}`;
+		}
+		const file = item.media_path.split('/').pop() ?? item.media_path;
+		return file.replace(/\.[^.]+$/, '');
+	}
+
+	function buildBulkItemsPayload() {
+		return selectedPaths.map((mediaPath) => {
+			const item = items.find((value) => value.media_path === mediaPath);
+			if (!item) {
+				return {
+					media_path: mediaPath,
+					item_uid: mediaPath,
+					metadata_override: undefined
+				};
+			}
+
+			return {
+				media_path: item.media_path,
+				item_uid: deriveUid(item),
+				metadata_override: {
+					title: item.parsed_title,
+					year: item.parsed_year,
+					provider_id: item.parsed_provider_id,
+					confidence: item.metadata_confidence
+				}
+			};
+		});
+	}
+
+	async function runPreview() {
+		if (selectedPaths.length === 0) {
+			error = 'Select at least one item first.';
+			return;
+		}
+
+		busy = true;
+		error = '';
+		applyResult = null;
+		const response = await apiFetch('/api/bulk/dry-run', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				action: 'metadata_lookup',
+				items: buildBulkItemsPayload()
+			})
+		});
+		if (!response.ok) {
+			error = await response.text();
+			busy = false;
+			return;
+		}
+
+		preview = (await response.json()) as BulkDryRunResponse;
+		busy = false;
+	}
+
+	async function applyPreview() {
+		if (!preview) {
+			error = 'Run preview first.';
+			return;
+		}
+		if (!preview.plan_ready) {
+			error = 'Preview has invalid items. Resolve before apply.';
+			return;
+		}
+
+		busy = true;
+		error = '';
+		const response = await apiFetch('/api/bulk/apply', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				action: 'metadata_lookup',
+				approved_batch_hash: preview.batch_hash,
+				items: buildBulkItemsPayload()
+			})
+		});
+		if (!response.ok) {
+			error = await response.text();
+			busy = false;
+			return;
+		}
+
+		applyResult = (await response.json()) as BulkApplyResponse;
+		busy = false;
+		await refresh();
 	}
 
 	async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -82,8 +227,20 @@
 			<label class="toggle mono"><input type="checkbox" bind:checked={onlyMissingProvider} /> Only Missing Provider</label>
 			<label class="mono">Max Confidence <input class="conf" type="number" min="0" max="1" step="0.01" bind:value={maxConfidence} /></label>
 			<button type="button" onclick={refresh} disabled={loading}>Refresh</button>
+			<button type="button" onclick={selectAll} disabled={loading || items.length === 0}>Select All</button>
+			<button type="button" onclick={clearSelection} disabled={loading || selectedPaths.length === 0}>Clear</button>
+			<button type="button" onclick={runPreview} disabled={busy || selectedPaths.length === 0}>Preview Apply</button>
+			<button type="button" onclick={applyPreview} disabled={busy || !preview || !preview.plan_ready}>Apply Preview</button>
 			<a class="library-link" href="/library">Open Library Bulk Editor</a>
 		</div>
+
+		<p class="mono">selected={selectedPaths.length}</p>
+		{#if preview}
+			<p class="mono">preview batch={preview.batch_hash} total={preview.total_items} creates={preview.summary.creates} updates={preview.summary.updates} invalid={preview.summary.invalid}</p>
+		{/if}
+		{#if applyResult}
+			<p class="mono">applied total={applyResult.total_items} ok={applyResult.succeeded} fail={applyResult.failed}</p>
+		{/if}
 
 		{#if error}
 			<p class="error">{error}</p>
@@ -97,6 +254,7 @@
 				<table class="mono">
 					<thead>
 						<tr>
+							<th>Select</th>
 							<th>Media Path</th>
 							<th>Parsed Title</th>
 							<th>Year</th>
@@ -107,6 +265,7 @@
 					<tbody>
 						{#each items as item}
 							<tr>
+								<td><input type="checkbox" checked={isSelected(item.media_path)} onchange={() => toggleSelection(item.media_path)} /></td>
 								<td>{item.media_path}</td>
 								<td>{item.parsed_title ?? 'n/a'}</td>
 								<td>{item.parsed_year ?? 'n/a'}</td>

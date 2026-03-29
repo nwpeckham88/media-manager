@@ -74,6 +74,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/api/consolidation/semantic-duplicates",
             get(consolidation_semantic_duplicates),
         )
+        .route(
+            "/api/consolidation/quarantine",
+            post(consolidation_quarantine),
+        )
         .route("/api/operations/recent", get(recent_operations))
         .route("/api/jobs/recent", get(recent_jobs))
         .route("/api/jobs/cancel", post(cancel_job))
@@ -661,6 +665,145 @@ async fn consolidation_semantic_duplicates(
         total_groups: groups.len(),
         groups,
     }))
+}
+
+async fn consolidation_quarantine(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ConsolidationQuarantineRequest>,
+) -> Result<Json<ConsolidationQuarantineResponse>, (StatusCode, String)> {
+    ensure_preflight_ready(&state)?;
+
+    if request.media_paths.len() < 2 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "at least two media paths are required to quarantine duplicates".to_string(),
+        ));
+    }
+
+    let keep_path = PathBuf::from(&request.keep_media_path);
+    if let Err(err) = ensure_media_file_path_allowed(&keep_path, &state.library_roots) {
+        return Err(err);
+    }
+
+    let set: std::collections::HashSet<&str> = request.media_paths.iter().map(String::as_str).collect();
+    if !set.contains(request.keep_media_path.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "keep_media_path must be included in media_paths".to_string(),
+        ));
+    }
+
+    let payload_json = serde_json::to_string(&request).unwrap_or_else(|_| "{}".to_string());
+    let job_id = create_job(&state, "consolidation_quarantine", &payload_json);
+
+    let mut items = Vec::new();
+    let mut succeeded = 0_usize;
+    let mut failed = 0_usize;
+    let quarantine_root = state.state_dir.join("quarantine");
+    if let Err(err) = fs::create_dir_all(&quarantine_root) {
+        complete_job(
+            &state,
+            job_id,
+            JobStatus::Failed,
+            None,
+            Some(format!("failed to create quarantine root: {err}")),
+        );
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to create quarantine root: {err}"),
+        ));
+    }
+
+    for media_path in &request.media_paths {
+        if media_path == &request.keep_media_path {
+            items.push(ConsolidationQuarantineItemResult {
+                media_path: media_path.clone(),
+                quarantined_path: None,
+                operation_id: None,
+                success: true,
+                error: None,
+                note: Some("kept".to_string()),
+            });
+            continue;
+        }
+
+        let source = PathBuf::from(media_path);
+        if let Err(err) = ensure_media_file_path_allowed(&source, &state.library_roots) {
+            failed += 1;
+            items.push(ConsolidationQuarantineItemResult {
+                media_path: media_path.clone(),
+                quarantined_path: None,
+                operation_id: None,
+                success: false,
+                error: Some(err.1),
+                note: Some("skipped".to_string()),
+            });
+            continue;
+        }
+
+        let file_name = source
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("unknown.bin");
+        let unique = format!(
+            "{}-{}-{}",
+            current_timestamp_ms(),
+            std::process::id(),
+            FS_OPERATION_NONCE.fetch_add(1, Ordering::Relaxed)
+        );
+        let target = quarantine_root.join(format!("{unique}-{file_name}"));
+
+        match apply_rename_with_rollback(&state.state_dir, &source, &target) {
+            Ok(operation_id) => {
+                succeeded += 1;
+                items.push(ConsolidationQuarantineItemResult {
+                    media_path: media_path.clone(),
+                    quarantined_path: Some(target.display().to_string()),
+                    operation_id: Some(operation_id),
+                    success: true,
+                    error: None,
+                    note: Some("quarantined".to_string()),
+                });
+            }
+            Err(err) => {
+                failed += 1;
+                items.push(ConsolidationQuarantineItemResult {
+                    media_path: media_path.clone(),
+                    quarantined_path: None,
+                    operation_id: None,
+                    success: false,
+                    error: Some(err),
+                    note: Some("failed".to_string()),
+                });
+            }
+        }
+    }
+
+    let response = ConsolidationQuarantineResponse {
+        keep_media_path: request.keep_media_path,
+        total_items: request.media_paths.len(),
+        succeeded,
+        failed,
+        items,
+    };
+
+    complete_job(
+        &state,
+        job_id,
+        if failed == 0 {
+            JobStatus::Succeeded
+        } else {
+            JobStatus::Failed
+        },
+        serde_json::to_string(&response).ok(),
+        if failed == 0 {
+            None
+        } else {
+            Some("one or more quarantine operations failed".to_string())
+        },
+    );
+
+    Ok(Json(response))
 }
 
 fn run_library_index_job(
@@ -3301,6 +3444,12 @@ struct SemanticDuplicatesQuery {
     min_group_size: Option<usize>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct ConsolidationQuarantineRequest {
+    keep_media_path: String,
+    media_paths: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct ExactDuplicatesResponse {
     total_groups: usize,
@@ -3348,6 +3497,25 @@ struct SemanticDuplicateItem {
     audio_codec: Option<String>,
     width: Option<i64>,
     height: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConsolidationQuarantineResponse {
+    keep_media_path: String,
+    total_items: usize,
+    succeeded: usize,
+    failed: usize,
+    items: Vec<ConsolidationQuarantineItemResult>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConsolidationQuarantineItemResult {
+    media_path: String,
+    quarantined_path: Option<String>,
+    operation_id: Option<String>,
+    success: bool,
+    error: Option<String>,
+    note: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

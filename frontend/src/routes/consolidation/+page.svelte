@@ -51,6 +51,27 @@
 		groups: SemanticDuplicateGroup[];
 	};
 
+	type ConsolidationQuarantineResponse = {
+		total_items: number;
+		succeeded: number;
+		failed: number;
+	};
+
+	type BulkDryRunResponse = {
+		batch_hash: string;
+		total_items: number;
+		plan_ready: boolean;
+		summary: {
+			invalid: number;
+		};
+	};
+
+	type BulkApplyResponse = {
+		total_items: number;
+		succeeded: number;
+		failed: number;
+	};
+
 	let loading = $state(false);
 	let indexing = $state(false);
 	let error = $state('');
@@ -58,6 +79,8 @@
 	let stats = $state<IndexStatsResponse | null>(null);
 	let exactGroups = $state<ExactDuplicateGroup[]>([]);
 	let semanticGroups = $state<SemanticDuplicateGroup[]>([]);
+	let mergingKey = $state<string | null>(null);
+	let quarantiningKey = $state<string | null>(null);
 
 	onMount(async () => {
 		await refresh();
@@ -124,6 +147,76 @@
 		await refresh();
 	}
 
+	function canonicalUidForGroup(group: SemanticDuplicateGroup): string {
+		const base = group.parsed_title
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '-')
+			.replace(/^-+|-+$/g, '');
+		return `${base}${group.parsed_year ? `-${group.parsed_year}` : ''}`;
+	}
+
+	function groupKey(group: SemanticDuplicateGroup): string {
+		return `${group.parsed_title}|${group.parsed_year ?? 'none'}|${group.parsed_provider_id ?? 'none'}`;
+	}
+
+	async function mergeSemanticGroup(group: SemanticDuplicateGroup) {
+		if (group.items.length < 2) {
+			return;
+		}
+
+		const key = groupKey(group);
+		mergingKey = key;
+		error = '';
+		notice = '';
+
+		const uid = canonicalUidForGroup(group);
+		const itemsPayload = group.items.map((item) => ({
+			media_path: item.media_path,
+			item_uid: uid
+		}));
+
+		const previewResponse = await apiFetch('/api/bulk/dry-run', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				action: 'combine_duplicates',
+				items: itemsPayload
+			})
+		});
+		if (!previewResponse.ok) {
+			error = await previewResponse.text();
+			mergingKey = null;
+			return;
+		}
+
+		const preview = (await previewResponse.json()) as BulkDryRunResponse;
+		if (!preview.plan_ready) {
+			error = 'Merge preview has invalid items; cannot apply.';
+			mergingKey = null;
+			return;
+		}
+
+		const applyResponse = await apiFetch('/api/bulk/apply', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				action: 'combine_duplicates',
+				approved_batch_hash: preview.batch_hash,
+				items: itemsPayload
+			})
+		});
+		if (!applyResponse.ok) {
+			error = await applyResponse.text();
+			mergingKey = null;
+			return;
+		}
+
+		const result = (await applyResponse.json()) as BulkApplyResponse;
+		notice = `Merged semantic group to uid=${uid} (ok=${result.succeeded}, fail=${result.failed})`;
+		mergingKey = null;
+		await refresh();
+	}
+
 	function formatBytes(bytes: number): string {
 		if (bytes < 1024) {
 			return `${bytes} B`;
@@ -137,6 +230,44 @@
 			return `${mib.toFixed(1)} MiB`;
 		}
 		return `${(mib / 1024).toFixed(2)} GiB`;
+	}
+
+	function exactGroupKey(group: ExactDuplicateGroup): string {
+		return group.content_hash;
+	}
+
+	async function quarantineExactGroup(group: ExactDuplicateGroup) {
+		if (group.items.length < 2) {
+			return;
+		}
+
+		const key = exactGroupKey(group);
+		quarantiningKey = key;
+		error = '';
+		notice = '';
+
+		const sortedBySize = [...group.items].sort((a, b) => b.file_size - a.file_size);
+		const keep = sortedBySize[0];
+		const payload = {
+			keep_media_path: keep.media_path,
+			media_paths: group.items.map((item) => item.media_path)
+		};
+
+		const response = await apiFetch('/api/consolidation/quarantine', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(payload)
+		});
+		if (!response.ok) {
+			error = await response.text();
+			quarantiningKey = null;
+			return;
+		}
+
+		const result = (await response.json()) as ConsolidationQuarantineResponse;
+		notice = `Quarantine complete for hash ${group.content_hash.slice(0, 12)}... (ok=${result.succeeded} fail=${result.failed})`;
+		quarantiningKey = null;
+		await refresh();
 	}
 
 	async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -197,8 +328,14 @@
 		{:else}
 			<div class="group-grid">
 				{#each exactGroups as group}
+					{@const key = exactGroupKey(group)}
 					<article class="group-card">
 						<p class="mono">hash={group.content_hash.slice(0, 16)}... count={group.count}</p>
+						<div class="actions">
+							<button type="button" onclick={() => quarantineExactGroup(group)} disabled={quarantiningKey !== null && quarantiningKey !== key}>
+								{quarantiningKey === key ? 'Quarantining...' : 'Keep Largest, Quarantine Rest'}
+							</button>
+						</div>
 						<ul class="rows mono">
 							{#each group.items as item}
 								<li>
@@ -223,11 +360,17 @@
 		{:else}
 			<div class="group-grid">
 				{#each semanticGroups as group}
+					{@const key = groupKey(group)}
 					<article class="group-card">
 						<p class="mono">
 							title={group.parsed_title} year={group.parsed_year ?? 'unknown'} provider={group.parsed_provider_id ?? 'none'}
 						</p>
 						<p class="mono">items={group.item_count} variants={group.variant_count}</p>
+						<div class="actions">
+							<button type="button" onclick={() => mergeSemanticGroup(group)} disabled={mergingKey !== null && mergingKey !== key}>
+								{mergingKey === key ? 'Merging...' : `Merge IDs -> ${canonicalUidForGroup(group)}`}
+							</button>
+						</div>
 						<ul class="rows mono">
 							{#each group.items as item}
 								<li>
