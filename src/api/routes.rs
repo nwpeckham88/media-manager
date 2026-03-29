@@ -1,4 +1,6 @@
+use std::io::Read;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
@@ -13,8 +15,10 @@ use axum::http::StatusCode;
 use axum::middleware;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use crate::audit_store::AuditStore;
 use crate::auth;
@@ -42,6 +46,7 @@ pub struct AppState {
     pub toolchain: ToolchainSnapshot,
     pub library_roots: Vec<PathBuf>,
     pub state_dir: PathBuf,
+    pub audit_db_path: PathBuf,
     pub api_token: Option<String>,
     pub operation_log: OperationLog,
     pub audit_store: AuditStore,
@@ -57,6 +62,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/diagnostics/preflight", get(preflight))
         .route("/api/scan/summary", get(scan_summary))
         .route("/api/library/items", get(library_items))
+        .route("/api/index/start", post(start_library_index))
+        .route("/api/index/stats", get(index_stats))
+        .route("/api/index/items", get(index_items))
+        .route("/api/formatting/candidates", get(formatting_candidates))
+        .route(
+            "/api/consolidation/exact-duplicates",
+            get(consolidation_exact_duplicates),
+        )
+        .route(
+            "/api/consolidation/semantic-duplicates",
+            get(consolidation_semantic_duplicates),
+        )
         .route("/api/operations/recent", get(recent_operations))
         .route("/api/jobs/recent", get(recent_jobs))
         .route("/api/jobs/cancel", post(cancel_job))
@@ -243,6 +260,691 @@ async fn library_items(
     );
 
     Ok(Json(result))
+}
+
+async fn start_library_index(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<IndexStartRequest>,
+) -> Result<Json<IndexStartResponse>, (StatusCode, String)> {
+    if state.library_roots.is_empty() {
+        return Err((
+            StatusCode::FAILED_DEPENDENCY,
+            "MM_LIBRARY_ROOTS is not configured".to_string(),
+        ));
+    }
+
+    let running_index_jobs = state
+        .jobs_store
+        .count_jobs_filtered(Some("running"), Some("library_index"), false)
+        .map_err(internal_error)?;
+    if running_index_jobs > 0 {
+        return Err((
+            StatusCode::CONFLICT,
+            "an index job is already running".to_string(),
+        ));
+    }
+
+    let include_hashes = request.include_hashes.unwrap_or(true);
+    let include_probe = request.include_probe.unwrap_or(true);
+    let payload_json = serde_json::to_string(&json!({
+        "include_hashes": include_hashes,
+        "include_probe": include_probe,
+    }))
+    .unwrap_or_else(|_| "{}".to_string());
+
+    let Some(job_id) = create_job(&state, "library_index", &payload_json) else {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "failed to create index job".to_string(),
+        ));
+    };
+
+    let db_path = state.audit_db_path.clone();
+    let library_roots = state.library_roots.clone();
+    let ffprobe_path = state.toolchain.ffprobe.path.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let result = run_library_index_job(
+            &db_path,
+            &library_roots,
+            &ffprobe_path,
+            job_id,
+            include_hashes,
+            include_probe,
+        );
+
+        if let Err(err) = result {
+            let _ = complete_job_direct(
+                &db_path,
+                job_id,
+                JobStatus::Failed,
+                None,
+                Some(err.to_string()),
+            );
+        }
+    });
+
+    Ok(Json(IndexStartResponse {
+        job_id,
+        started: true,
+        message: "library indexing started".to_string(),
+    }))
+}
+
+async fn index_stats(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<IndexStatsResponse>, (StatusCode, String)> {
+    let conn = Connection::open(&state.audit_db_path).map_err(internal_error)?;
+    let total_indexed: i64 = conn
+        .query_row("SELECT COUNT(*) FROM media_index", [], |row| row.get(0))
+        .map_err(internal_error)?;
+    let hashed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM media_index WHERE content_hash_sha256 IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(internal_error)?;
+    let probed: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM media_index WHERE duration_seconds IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(internal_error)?;
+    let last_indexed_at_ms: Option<i64> = conn
+        .query_row("SELECT MAX(indexed_at_ms) FROM media_index", [], |row| row.get(0))
+        .map_err(internal_error)?;
+
+    Ok(Json(IndexStatsResponse {
+        total_indexed: total_indexed.max(0) as usize,
+        hashed: hashed.max(0) as usize,
+        probed: probed.max(0) as usize,
+        last_indexed_at_ms,
+    }))
+}
+
+async fn index_items(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<IndexItemsQuery>,
+) -> Result<Json<IndexItemsResponse>, (StatusCode, String)> {
+    let conn = Connection::open(&state.audit_db_path).map_err(internal_error)?;
+    let limit = query.limit.unwrap_or(120).clamp(1, 500) as i64;
+    let offset = query.offset.unwrap_or(0) as i64;
+
+    let mut items: Vec<IndexedMediaItem> = Vec::new();
+    let mut stmt = conn
+        .prepare(
+            "SELECT media_path, root, parsed_title, parsed_year, parsed_provider_id, metadata_confidence,
+                    content_hash_sha256, duration_seconds, video_codec, audio_codec, width, height, indexed_at_ms
+             FROM media_index
+             ORDER BY media_path ASC
+             LIMIT ?1 OFFSET ?2",
+        )
+        .map_err(internal_error)?;
+    let rows = stmt
+        .query_map(params![limit, offset], |row| {
+            Ok(IndexedMediaItem {
+                media_path: row.get(0)?,
+                root: row.get(1)?,
+                parsed_title: row.get(2)?,
+                parsed_year: row.get(3)?,
+                parsed_provider_id: row.get(4)?,
+                metadata_confidence: row.get(5)?,
+                content_hash_sha256: row.get(6)?,
+                duration_seconds: row.get(7)?,
+                video_codec: row.get(8)?,
+                audio_codec: row.get(9)?,
+                width: row.get(10)?,
+                height: row.get(11)?,
+                indexed_at_ms: row.get(12)?,
+            })
+        })
+        .map_err(internal_error)?;
+
+    for row in rows {
+        items.push(row.map_err(internal_error)?);
+    }
+
+    if let Some(only_missing_provider) = query.only_missing_provider
+        && only_missing_provider
+    {
+        items.retain(|item| item.parsed_provider_id.is_none());
+    }
+
+    if let Some(min_confidence) = query.min_confidence {
+        items.retain(|item| {
+            item.metadata_confidence
+                .map(|value| value >= min_confidence)
+                .unwrap_or(false)
+        });
+    }
+
+    if let Some(max_confidence) = query.max_confidence {
+        items.retain(|item| {
+            item.metadata_confidence
+                .map(|value| value <= max_confidence)
+                .unwrap_or(true)
+        });
+    }
+
+    if let Some(search) = query.q.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty()) {
+        let search = search.to_ascii_lowercase();
+        items.retain(|item| {
+            item.media_path.to_ascii_lowercase().contains(&search)
+                || item
+                    .parsed_title
+                    .as_ref()
+                    .map(|v| v.to_ascii_lowercase().contains(&search))
+                    .unwrap_or(false)
+                || item
+                    .parsed_provider_id
+                    .as_ref()
+                    .map(|v| v.to_ascii_lowercase().contains(&search))
+                    .unwrap_or(false)
+        });
+    }
+
+    Ok(Json(IndexItemsResponse {
+        total_items: items.len(),
+        offset: offset.max(0) as usize,
+        limit: limit.max(1) as usize,
+        items,
+    }))
+}
+
+async fn formatting_candidates(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<FormattingCandidatesQuery>,
+) -> Result<Json<FormattingCandidatesResponse>, (StatusCode, String)> {
+    let conn = Connection::open(&state.audit_db_path).map_err(internal_error)?;
+    let limit = query.limit.unwrap_or(120).clamp(1, 500) as i64;
+    let offset = query.offset.unwrap_or(0) as i64;
+
+    let mut candidates = Vec::new();
+    let mut stmt = conn
+        .prepare(
+            "SELECT media_path
+             FROM media_index
+             ORDER BY media_path ASC
+             LIMIT ?1 OFFSET ?2",
+        )
+        .map_err(internal_error)?;
+    let rows = stmt
+        .query_map(params![limit, offset], |row| row.get::<_, String>(0))
+        .map_err(internal_error)?;
+
+    for row in rows {
+        let media_path = PathBuf::from(row.map_err(internal_error)?);
+        if !media_path.exists() {
+            continue;
+        }
+        if let Ok((target, note)) = compute_rename_target(&media_path)
+            && target != media_path
+        {
+            candidates.push(FormattingCandidateItem {
+                media_path: media_path.display().to_string(),
+                proposed_media_path: target.display().to_string(),
+                note,
+            });
+        }
+    }
+
+    Ok(Json(FormattingCandidatesResponse {
+        total_items: candidates.len(),
+        offset: offset.max(0) as usize,
+        limit: limit.max(1) as usize,
+        items: candidates,
+    }))
+}
+
+async fn consolidation_exact_duplicates(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ExactDuplicatesQuery>,
+) -> Result<Json<ExactDuplicatesResponse>, (StatusCode, String)> {
+    let conn = Connection::open(&state.audit_db_path).map_err(internal_error)?;
+    let group_limit = query.limit.unwrap_or(40).clamp(1, 200) as i64;
+    let min_group_size = query.min_group_size.unwrap_or(2).clamp(2, 1000) as i64;
+
+    let mut group_stmt = conn
+        .prepare(
+            "SELECT content_hash_sha256, COUNT(*) AS count
+             FROM media_index
+             WHERE content_hash_sha256 IS NOT NULL
+             GROUP BY content_hash_sha256
+             HAVING COUNT(*) >= ?1
+             ORDER BY count DESC
+             LIMIT ?2",
+        )
+        .map_err(internal_error)?;
+
+    let mut groups = Vec::new();
+    let rows = group_stmt
+        .query_map(params![min_group_size, group_limit], |row| {
+            let hash: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            Ok((hash, count))
+        })
+        .map_err(internal_error)?;
+
+    for row in rows {
+        let (content_hash, count) = row.map_err(internal_error)?;
+        let mut item_stmt = conn
+            .prepare(
+                "SELECT media_path, file_size, parsed_title, parsed_year, parsed_provider_id
+                 FROM media_index
+                 WHERE content_hash_sha256 = ?1
+                 ORDER BY media_path ASC",
+            )
+            .map_err(internal_error)?;
+        let item_rows = item_stmt
+            .query_map([&content_hash], |item_row| {
+                Ok(ExactDuplicateItem {
+                    media_path: item_row.get(0)?,
+                    file_size: item_row.get::<_, i64>(1)? as u64,
+                    parsed_title: item_row.get(2)?,
+                    parsed_year: item_row.get(3)?,
+                    parsed_provider_id: item_row.get(4)?,
+                })
+            })
+            .map_err(internal_error)?;
+
+        let mut items = Vec::new();
+        for item in item_rows {
+            items.push(item.map_err(internal_error)?);
+        }
+
+        groups.push(ExactDuplicateGroup {
+            content_hash,
+            count: count.max(0) as usize,
+            items,
+        });
+    }
+
+    Ok(Json(ExactDuplicatesResponse {
+        total_groups: groups.len(),
+        groups,
+    }))
+}
+
+async fn consolidation_semantic_duplicates(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SemanticDuplicatesQuery>,
+) -> Result<Json<SemanticDuplicatesResponse>, (StatusCode, String)> {
+    let conn = Connection::open(&state.audit_db_path).map_err(internal_error)?;
+    let group_limit = query.limit.unwrap_or(40).clamp(1, 200) as i64;
+    let min_group_size = query.min_group_size.unwrap_or(2).clamp(2, 1000) as i64;
+
+    let mut group_stmt = conn
+        .prepare(
+            "SELECT
+                parsed_title,
+                parsed_year,
+                parsed_provider_id,
+                COUNT(*) AS item_count,
+                COUNT(DISTINCT COALESCE(content_hash_sha256, media_path)) AS variant_count
+             FROM media_index
+             WHERE parsed_title IS NOT NULL AND TRIM(parsed_title) != ''
+             GROUP BY parsed_title, parsed_year, parsed_provider_id
+             HAVING COUNT(*) >= ?1 AND COUNT(DISTINCT COALESCE(content_hash_sha256, media_path)) > 1
+             ORDER BY item_count DESC, variant_count DESC
+             LIMIT ?2",
+        )
+        .map_err(internal_error)?;
+
+    let mut groups = Vec::new();
+    let rows = group_stmt
+        .query_map(params![min_group_size, group_limit], |row| {
+            let parsed_title: String = row.get(0)?;
+            let parsed_year: Option<i64> = row.get(1)?;
+            let parsed_provider_id: Option<String> = row.get(2)?;
+            let item_count: i64 = row.get(3)?;
+            let variant_count: i64 = row.get(4)?;
+            Ok((
+                parsed_title,
+                parsed_year,
+                parsed_provider_id,
+                item_count,
+                variant_count,
+            ))
+        })
+        .map_err(internal_error)?;
+
+    for row in rows {
+        let (parsed_title, parsed_year, parsed_provider_id, item_count, variant_count) =
+            row.map_err(internal_error)?;
+
+        let mut item_stmt = conn
+            .prepare(
+                "SELECT media_path, file_size, content_hash_sha256, video_codec, audio_codec, width, height
+                 FROM media_index
+                 WHERE parsed_title = ?1
+                   AND ((parsed_year = ?2) OR (parsed_year IS NULL AND ?2 IS NULL))
+                   AND ((parsed_provider_id = ?3) OR (parsed_provider_id IS NULL AND ?3 IS NULL))
+                 ORDER BY media_path ASC",
+            )
+            .map_err(internal_error)?;
+
+        let item_rows = item_stmt
+            .query_map(
+                params![parsed_title, parsed_year, parsed_provider_id],
+                |item_row| {
+                    Ok(SemanticDuplicateItem {
+                        media_path: item_row.get(0)?,
+                        file_size: item_row.get::<_, i64>(1)? as u64,
+                        content_hash: item_row.get(2)?,
+                        video_codec: item_row.get(3)?,
+                        audio_codec: item_row.get(4)?,
+                        width: item_row.get(5)?,
+                        height: item_row.get(6)?,
+                    })
+                },
+            )
+            .map_err(internal_error)?;
+
+        let mut items = Vec::new();
+        for item in item_rows {
+            items.push(item.map_err(internal_error)?);
+        }
+
+        groups.push(SemanticDuplicateGroup {
+            parsed_title,
+            parsed_year,
+            parsed_provider_id,
+            item_count: item_count.max(0) as usize,
+            variant_count: variant_count.max(0) as usize,
+            items,
+        });
+    }
+
+    Ok(Json(SemanticDuplicatesResponse {
+        total_groups: groups.len(),
+        groups,
+    }))
+}
+
+fn run_library_index_job(
+    db_path: &PathBuf,
+    roots: &[PathBuf],
+    ffprobe_path: &str,
+    job_id: i64,
+    include_hashes: bool,
+    include_probe: bool,
+) -> Result<(), String> {
+    let media_files = discover_media_files(roots)?;
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+
+    let mut hashed_count = 0_usize;
+    let mut probed_count = 0_usize;
+    for media_path in &media_files {
+        let metadata = fs::metadata(media_path).map_err(|e| e.to_string())?;
+        let modified_at_ms = metadata
+            .modified()
+            .ok()
+            .and_then(|value| value.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis() as i64)
+            .unwrap_or(0);
+
+        let item_uid = media_path
+            .file_stem()
+            .and_then(|v| v.to_str())
+            .unwrap_or("unknown-item")
+            .to_string();
+        let metadata_candidate = infer_metadata_candidate(media_path, &item_uid, None);
+        let content_hash = if include_hashes {
+            let value = hash_file_sha256(media_path)?;
+            hashed_count += 1;
+            Some(value)
+        } else {
+            None
+        };
+        let probe_summary = if include_probe {
+            let summary = run_ffprobe_summary(ffprobe_path, media_path)?;
+            if summary.duration_seconds.is_some()
+                || summary.video_codec.is_some()
+                || summary.audio_codec.is_some()
+            {
+                probed_count += 1;
+            }
+            summary
+        } else {
+            ProbeSummary::default()
+        };
+
+        let root = roots
+            .iter()
+            .find(|candidate| media_path.starts_with(candidate))
+            .map(|v| v.display().to_string())
+            .unwrap_or_default();
+
+        conn.execute(
+            "INSERT INTO media_index(
+                media_path,
+                root,
+                file_size,
+                modified_at_ms,
+                content_hash_sha256,
+                parsed_title,
+                parsed_year,
+                parsed_provider_id,
+                metadata_confidence,
+                duration_seconds,
+                video_codec,
+                audio_codec,
+                width,
+                height,
+                indexed_at_ms
+            ) VALUES(
+                ?1, ?2, ?3, ?4, ?5,
+                ?6, ?7, ?8, ?9, ?10,
+                ?11, ?12, ?13, ?14, ?15
+            )
+            ON CONFLICT(media_path) DO UPDATE SET
+                root = excluded.root,
+                file_size = excluded.file_size,
+                modified_at_ms = excluded.modified_at_ms,
+                content_hash_sha256 = excluded.content_hash_sha256,
+                parsed_title = excluded.parsed_title,
+                parsed_year = excluded.parsed_year,
+                parsed_provider_id = excluded.parsed_provider_id,
+                metadata_confidence = excluded.metadata_confidence,
+                duration_seconds = excluded.duration_seconds,
+                video_codec = excluded.video_codec,
+                audio_codec = excluded.audio_codec,
+                width = excluded.width,
+                height = excluded.height,
+                indexed_at_ms = excluded.indexed_at_ms",
+            params![
+                media_path.display().to_string(),
+                root,
+                metadata.len() as i64,
+                modified_at_ms,
+                content_hash,
+                metadata_candidate.title,
+                metadata_candidate.year.map(i64::from),
+                metadata_candidate.provider_id,
+                metadata_candidate.confidence,
+                probe_summary.duration_seconds,
+                probe_summary.video_codec,
+                probe_summary.audio_codec,
+                probe_summary.width,
+                probe_summary.height,
+                current_timestamp_ms() as i64,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let result_json = serde_json::to_string(&json!({
+        "indexed": media_files.len(),
+        "hashed": hashed_count,
+        "probed": probed_count,
+    }))
+    .map_err(|e| e.to_string())?;
+
+    complete_job_direct(
+        db_path,
+        job_id,
+        JobStatus::Succeeded,
+        Some(result_json),
+        None,
+    )?;
+
+    Ok(())
+}
+
+fn discover_media_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
+    let allowed = [
+        "mkv", "mp4", "avi", "mov", "m4v", "wmv", "flv", "webm", "ts", "m2ts", "mpg",
+        "mpeg",
+    ];
+
+    let mut files = Vec::new();
+    for root in roots {
+        for entry in walkdir::WalkDir::new(root).into_iter().filter_map(Result::ok) {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let extension = entry
+                .path()
+                .extension()
+                .and_then(|v| v.to_str())
+                .map(|v| v.to_ascii_lowercase());
+            let Some(extension) = extension else {
+                continue;
+            };
+            if !allowed.contains(&extension.as_str()) {
+                continue;
+            }
+
+            files.push(entry.path().to_path_buf());
+        }
+    }
+
+    files.sort();
+    Ok(files)
+}
+
+#[derive(Debug, Default)]
+struct ProbeSummary {
+    duration_seconds: Option<f64>,
+    video_codec: Option<String>,
+    audio_codec: Option<String>,
+    width: Option<i64>,
+    height: Option<i64>,
+}
+
+fn run_ffprobe_summary(ffprobe_path: &str, media_path: &PathBuf) -> Result<ProbeSummary, String> {
+    let output = Command::new(ffprobe_path)
+        .arg("-v")
+        .arg("error")
+        .arg("-print_format")
+        .arg("json")
+        .arg("-show_streams")
+        .arg("-show_format")
+        .arg(media_path)
+        .output()
+        .map_err(|e| format!("ffprobe failed to execute: {e}"))?;
+
+    if !output.status.success() {
+        return Ok(ProbeSummary::default());
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).map_err(|e| format!("ffprobe json error: {e}"))?;
+
+    let duration_seconds = parsed
+        .get("format")
+        .and_then(|v| v.get("duration"))
+        .and_then(|v| v.as_str())
+        .and_then(|v| v.parse::<f64>().ok());
+
+    let streams = parsed
+        .get("streams")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut video_codec = None;
+    let mut audio_codec = None;
+    let mut width = None;
+    let mut height = None;
+
+    for stream in streams {
+        let codec_type = stream
+            .get("codec_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        if codec_type == "video" && video_codec.is_none() {
+            video_codec = stream
+                .get("codec_name")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
+            width = stream.get("width").and_then(|v| v.as_i64());
+            height = stream.get("height").and_then(|v| v.as_i64());
+        } else if codec_type == "audio" && audio_codec.is_none() {
+            audio_codec = stream
+                .get("codec_name")
+                .and_then(|v| v.as_str())
+                .map(ToString::to_string);
+        }
+    }
+
+    Ok(ProbeSummary {
+        duration_seconds,
+        video_codec,
+        audio_codec,
+        width,
+        height,
+    })
+}
+
+fn hash_file_sha256(path: &PathBuf) -> Result<String, String> {
+    let file = fs::File::open(path).map_err(|e| format!("open hash input failed: {e}"))?;
+    let mut reader = std::io::BufReader::new(file);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+
+    loop {
+        let bytes_read = reader
+            .read(&mut buffer)
+            .map_err(|e| format!("read hash input failed: {e}"))?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+    }
+
+    let digest = hasher.finalize();
+    Ok(format!("{digest:x}"))
+}
+
+fn complete_job_direct(
+    db_path: &PathBuf,
+    job_id: i64,
+    status: JobStatus,
+    result_json: Option<String>,
+    error: Option<String>,
+) -> Result<(), String> {
+    let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE jobs SET status = ?1, updated_at_ms = ?2, result_json = ?3, error = ?4 WHERE id = ?5",
+        params![
+            match status {
+                JobStatus::Running => "running",
+                JobStatus::Succeeded => "succeeded",
+                JobStatus::Failed => "failed",
+                JobStatus::Canceled => "canceled",
+            },
+            current_timestamp_ms() as i64,
+            result_json,
+            error,
+            job_id,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 async fn recent_operations(
@@ -1736,22 +2438,27 @@ fn duplicate_uid_for_item(
 }
 
 fn duplicate_key_for_media_path(media_path: &std::path::Path) -> String {
+    if let Some(parsed) = parse_folder_metadata_from_media_path(media_path) {
+        let title_key = normalize_filename_stem(&parsed.title).to_ascii_lowercase();
+        return format!(
+            "{}|{}|{}",
+            title_key,
+            parsed
+                .year
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+            parsed
+                .provider_id
+                .map(|v| v.to_ascii_lowercase())
+                .unwrap_or_else(|| "provider:none".to_string())
+        );
+    }
+
     let stem = media_path
         .file_stem()
         .and_then(|v| v.to_str())
         .unwrap_or("unknown-item");
-    let base = normalize_duplicate_key(stem);
-    let size_bucket = duplicate_size_bucket_for_media_path(media_path)
-        .map(|v| v.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    format!("{base}|size:{size_bucket}")
-}
-
-fn duplicate_size_bucket_for_media_path(media_path: &std::path::Path) -> Option<u64> {
-    // Coarse 512MB buckets reduce false positives while allowing near-identical encodes to group.
-    const BUCKET_BYTES: u64 = 512 * 1024 * 1024;
-    let metadata = fs::metadata(media_path).ok()?;
-    Some(metadata.len() / BUCKET_BYTES)
+    normalize_duplicate_key(stem)
 }
 
 fn normalize_duplicate_key(stem: &str) -> String {
@@ -1867,6 +2574,27 @@ fn infer_metadata_candidate(
     item_uid: &str,
     metadata_override: Option<&MetadataOverrideInput>,
 ) -> MetadataCandidate {
+    if let Some(parsed) = parse_folder_metadata_from_media_path(media_path) {
+        let override_title = metadata_override.and_then(|v| normalize_optional_string(&v.title));
+        let override_provider_id =
+            metadata_override.and_then(|v| normalize_optional_string(&v.provider_id));
+        let override_year = metadata_override.and_then(|v| v.year);
+        let override_confidence = metadata_override.and_then(|v| v.confidence);
+
+        let provider_id = parsed
+            .provider_id
+            .unwrap_or_else(|| build_local_provider_id(&parsed.title, parsed.year));
+
+        return MetadataCandidate {
+            title: override_title.unwrap_or(parsed.title),
+            year: override_year.or(parsed.year),
+            provider_id: override_provider_id.unwrap_or(provider_id),
+            confidence: override_confidence
+                .unwrap_or(parsed.confidence)
+                .clamp(0.0, 1.0),
+        };
+    }
+
     let stem = media_path
         .file_stem()
         .and_then(|v| v.to_str())
@@ -1922,10 +2650,7 @@ fn infer_metadata_candidate(
     }
     let confidence = confidence.min(0.95);
 
-    let mut hasher = DefaultHasher::new();
-    title.to_ascii_lowercase().hash(&mut hasher);
-    year.unwrap_or(0).hash(&mut hasher);
-    let provider_id = format!("tmdb-local-{:08x}", (hasher.finish() & 0xffff_ffff));
+    let provider_id = build_local_provider_id(&title, year);
 
     let override_title = metadata_override.and_then(|v| normalize_optional_string(&v.title));
     let override_provider_id =
@@ -1939,6 +2664,138 @@ fn infer_metadata_candidate(
         provider_id: override_provider_id.unwrap_or(provider_id),
         confidence: override_confidence.unwrap_or(confidence).clamp(0.0, 1.0),
     }
+}
+
+#[derive(Debug, Clone)]
+struct ParsedFolderMetadata {
+    title: String,
+    year: Option<u16>,
+    provider_id: Option<String>,
+    confidence: f32,
+}
+
+fn build_local_provider_id(title: &str, year: Option<u16>) -> String {
+    let mut hasher = DefaultHasher::new();
+    title.to_ascii_lowercase().hash(&mut hasher);
+    year.unwrap_or(0).hash(&mut hasher);
+    format!("tmdb-local-{:08x}", (hasher.finish() & 0xffff_ffff))
+}
+
+fn parse_folder_metadata_from_media_path(media_path: &std::path::Path) -> Option<ParsedFolderMetadata> {
+    let folder_name = media_path.parent()?.file_name()?.to_str()?;
+    parse_movie_folder_pattern(folder_name)
+}
+
+fn parse_movie_folder_pattern(folder_name: &str) -> Option<ParsedFolderMetadata> {
+    if folder_name.trim().is_empty() {
+        return None;
+    }
+
+    let (provider_id, cleaned_provider) = extract_provider_id(folder_name);
+    let (year, cleaned_year) = extract_year(&cleaned_provider);
+    let title = cleaned_year.trim().to_string();
+    if title.is_empty() || (year.is_none() && provider_id.is_none()) {
+        return None;
+    }
+
+    let mut confidence: f32 = 0.68;
+    if year.is_some() {
+        confidence += 0.17;
+    }
+    if provider_id.is_some() {
+        confidence += 0.12;
+    }
+
+    Some(ParsedFolderMetadata {
+        title,
+        year,
+        provider_id,
+        confidence: confidence.min(0.98),
+    })
+}
+
+fn extract_provider_id(input: &str) -> (Option<String>, String) {
+    let mut working = input.to_string();
+    let mut provider_id: Option<String> = None;
+
+    let mut cursor = 0;
+    while let Some(start_rel) = working[cursor..].find('[') {
+        let start = cursor + start_rel;
+        let Some(end_rel) = working[start + 1..].find(']') else {
+            break;
+        };
+        let end = start + 1 + end_rel;
+        let raw = working[start + 1..end].trim().to_ascii_lowercase();
+        let compact: String = raw
+            .chars()
+            .filter(|ch| !ch.is_ascii_whitespace() && *ch != '_')
+            .collect();
+
+        if let Some(rest) = compact.strip_prefix("imdb-") {
+            if rest.starts_with("tt") && rest[2..].chars().all(|ch| ch.is_ascii_digit()) {
+                provider_id = Some(format!("imdb-{rest}"));
+            }
+        } else if let Some(rest) = compact.strip_prefix("imdbtt") {
+            if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
+                provider_id = Some(format!("imdb-tt{rest}"));
+            }
+        } else if let Some(rest) = compact.strip_prefix("tmdbid-") {
+            if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
+                provider_id = Some(format!("tmdb-{rest}"));
+            }
+        } else if let Some(rest) = compact.strip_prefix("tmdbid") {
+            if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
+                provider_id = Some(format!("tmdb-{rest}"));
+            }
+        } else if let Some(rest) = compact.strip_prefix("tmdb-") {
+            if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
+                provider_id = Some(format!("tmdb-{rest}"));
+            }
+        }
+
+        if provider_id.is_some() {
+            working.replace_range(start..=end, "");
+            break;
+        }
+
+        cursor = end + 1;
+    }
+
+    (provider_id, normalize_filename_stem(&working))
+}
+
+fn extract_year(input: &str) -> (Option<u16>, String) {
+    let mut year = None;
+    let mut working = input.to_string();
+
+    if let Some(start) = working.rfind('(')
+        && let Some(end_rel) = working[start + 1..].find(')')
+    {
+        let end = start + 1 + end_rel;
+        let candidate = working[start + 1..end].trim();
+        if candidate.len() == 4
+            && let Ok(parsed) = candidate.parse::<u16>()
+            && (1900..=2100).contains(&parsed)
+        {
+            year = Some(parsed);
+            working.replace_range(start..=end, "");
+            return (year, normalize_filename_stem(&working));
+        }
+    }
+
+    for token in input.split_whitespace() {
+        if token.len() == 4
+            && let Ok(parsed) = token.parse::<u16>()
+            && (1900..=2100).contains(&parsed)
+        {
+            year = Some(parsed);
+            let marker = token.to_string();
+            working = working.replace(&marker, " ");
+            break;
+        }
+    }
+
+    (year, normalize_filename_stem(&working))
 }
 
 fn normalize_optional_string(value: &Option<String>) -> Option<String> {
@@ -2356,6 +3213,144 @@ struct LibraryItemsQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct IndexStartRequest {
+    include_hashes: Option<bool>,
+    include_probe: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
+struct IndexStartResponse {
+    job_id: i64,
+    started: bool,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct IndexStatsResponse {
+    total_indexed: usize,
+    hashed: usize,
+    probed: usize,
+    last_indexed_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IndexItemsQuery {
+    q: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    only_missing_provider: Option<bool>,
+    min_confidence: Option<f32>,
+    max_confidence: Option<f32>,
+}
+
+#[derive(Debug, Serialize)]
+struct IndexItemsResponse {
+    total_items: usize,
+    offset: usize,
+    limit: usize,
+    items: Vec<IndexedMediaItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct IndexedMediaItem {
+    media_path: String,
+    root: String,
+    parsed_title: Option<String>,
+    parsed_year: Option<i64>,
+    parsed_provider_id: Option<String>,
+    metadata_confidence: Option<f32>,
+    content_hash_sha256: Option<String>,
+    duration_seconds: Option<f64>,
+    video_codec: Option<String>,
+    audio_codec: Option<String>,
+    width: Option<i64>,
+    height: Option<i64>,
+    indexed_at_ms: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct FormattingCandidatesQuery {
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct FormattingCandidatesResponse {
+    total_items: usize,
+    offset: usize,
+    limit: usize,
+    items: Vec<FormattingCandidateItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct FormattingCandidateItem {
+    media_path: String,
+    proposed_media_path: String,
+    note: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExactDuplicatesQuery {
+    limit: Option<usize>,
+    min_group_size: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SemanticDuplicatesQuery {
+    limit: Option<usize>,
+    min_group_size: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExactDuplicatesResponse {
+    total_groups: usize,
+    groups: Vec<ExactDuplicateGroup>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExactDuplicateGroup {
+    content_hash: String,
+    count: usize,
+    items: Vec<ExactDuplicateItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct ExactDuplicateItem {
+    media_path: String,
+    file_size: u64,
+    parsed_title: Option<String>,
+    parsed_year: Option<i64>,
+    parsed_provider_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SemanticDuplicatesResponse {
+    total_groups: usize,
+    groups: Vec<SemanticDuplicateGroup>,
+}
+
+#[derive(Debug, Serialize)]
+struct SemanticDuplicateGroup {
+    parsed_title: String,
+    parsed_year: Option<i64>,
+    parsed_provider_id: Option<String>,
+    item_count: usize,
+    variant_count: usize,
+    items: Vec<SemanticDuplicateItem>,
+}
+
+#[derive(Debug, Serialize)]
+struct SemanticDuplicateItem {
+    media_path: String,
+    file_size: u64,
+    content_hash: Option<String>,
+    video_codec: Option<String>,
+    audio_codec: Option<String>,
+    width: Option<i64>,
+    height: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
 struct SidecarUpsertRequest {
     media_path: String,
     item_uid: String,
@@ -2616,13 +3611,10 @@ mod tests {
             "movie name|2024"
         );
         assert_eq!(
-            groups.get("movie name|2024|size:unknown").map(Vec::len),
+            groups.get("movie name|2024").map(Vec::len),
             Some(2)
         );
-        assert_eq!(
-            groups.get("other movie|none|size:unknown").map(Vec::len),
-            Some(1)
-        );
+        assert_eq!(groups.get("other movie|none").map(Vec::len), Some(1));
     }
 
     #[test]
@@ -2634,17 +3626,41 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_key_includes_size_bucket_for_existing_files() {
-        let root = unique_temp_dir("duplicate-size");
+    fn duplicate_key_uses_folder_movie_signature_when_present() {
+        let root = unique_temp_dir("duplicate-folder-signature");
         fs::create_dir_all(&root).expect("create root");
-        let media_path = root.join("Sample.Movie.2021.mkv");
+        let folder = root.join("Sample Movie (2021) - [imdb-tt7654321]");
+        fs::create_dir_all(&folder).expect("create folder");
+        let media_path = folder.join("sample-file-v1.mkv");
         fs::write(&media_path, vec![0_u8; 1_500_000]).expect("write media");
 
         let key = duplicate_key_for_media_path(&media_path);
-        assert!(key.starts_with("sample movie|2021|size:"));
-        assert!(!key.ends_with("unknown"));
+        assert_eq!(key, "sample movie|2021|imdb-tt7654321");
 
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn metadata_inference_prefers_folder_pattern_when_available() {
+        let media = PathBuf::from(
+            "/media/movies/Ghostbusters - Frozen Empire (2024) - [tmdbid-967847]/Ghostbusters.mkv",
+        );
+        let candidate = infer_metadata_candidate(&media, "ghostbusters-uid", None);
+        assert_eq!(candidate.title, "Ghostbusters Frozen Empire");
+        assert_eq!(candidate.year, Some(2024));
+        assert_eq!(candidate.provider_id, "tmdb-967847");
+        assert!(candidate.confidence >= 0.9);
+    }
+
+    #[test]
+    fn metadata_inference_parses_imdb_folder_pattern() {
+        let media = PathBuf::from(
+            "/media/movies/Zootopia 2 (2025) - [imdb-tt26443597]/Zootopia 2 (2025).mkv",
+        );
+        let candidate = infer_metadata_candidate(&media, "zootopia-uid", None);
+        assert_eq!(candidate.title, "Zootopia 2");
+        assert_eq!(candidate.year, Some(2025));
+        assert_eq!(candidate.provider_id, "imdb-tt26443597");
     }
 
     #[test]

@@ -89,7 +89,6 @@
 		const params = new URLSearchParams();
 		params.set('limit', String(pageSize));
 		params.set('offset', String(offset));
-		params.set('bulk_only', 'true');
 		if (statusFilter !== 'all') {
 			params.set('status', statusFilter);
 		}
@@ -435,7 +434,7 @@
 		{:else if error}
 			<p class="error">{error}</p>
 		{:else if jobs.length === 0}
-			<p class="mono">No bulk jobs yet. Run a preview or apply from the Library page.</p>
+			<p class="mono">No jobs yet. Run indexing from Consolidation or preview/apply from Library.</p>
 		{:else}
 			<div class="table-wrap">
 				<table>

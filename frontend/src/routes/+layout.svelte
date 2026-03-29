@@ -36,6 +36,9 @@
 <div class="theme-wrap">
 	<nav class="main-nav" aria-label="Primary">
 		<a href="/">Dashboard</a>
+		<a href="/consolidation">Consolidation</a>
+		<a href="/metadata">Metadata</a>
+		<a href="/formatting">Formatting</a>
 		<a href="/library">Library</a>
 		<a href="/queue">Queue</a>
 	</nav>

@@ -86,6 +86,7 @@ async fn main() {
         toolchain,
         library_roots: config.library_roots.clone(),
         state_dir: config.state_dir.clone(),
+        audit_db_path: config.audit_db_path.clone(),
         api_token: config.api_token.clone(),
         operation_log: OperationLog::new(),
         audit_store,

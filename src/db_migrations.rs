@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::Connection;
 use thiserror::Error;
 
-pub const LATEST_SCHEMA_VERSION: i64 = 1;
+pub const LATEST_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Error)]
 pub enum DbMigrationError {
@@ -65,10 +65,11 @@ struct Migration {
 }
 
 fn migrations() -> &'static [Migration] {
-    &[Migration {
-        version: 1,
-        name: "initial_audit_and_jobs",
-        sql: r#"
+    &[
+        Migration {
+            version: 1,
+            name: "initial_audit_and_jobs",
+            sql: r#"
             CREATE TABLE IF NOT EXISTS operation_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp_ms INTEGER NOT NULL,
@@ -92,7 +93,40 @@ fn migrations() -> &'static [Migration] {
             CREATE INDEX IF NOT EXISTS idx_jobs_updated
             ON jobs(updated_at_ms DESC);
         "#,
-    }]
+        },
+        Migration {
+            version: 2,
+            name: "media_index",
+            sql: r#"
+            CREATE TABLE IF NOT EXISTS media_index (
+                media_path TEXT PRIMARY KEY,
+                root TEXT NOT NULL,
+                file_size INTEGER NOT NULL,
+                modified_at_ms INTEGER NOT NULL,
+                content_hash_sha256 TEXT,
+                parsed_title TEXT,
+                parsed_year INTEGER,
+                parsed_provider_id TEXT,
+                metadata_confidence REAL,
+                duration_seconds REAL,
+                video_codec TEXT,
+                audio_codec TEXT,
+                width INTEGER,
+                height INTEGER,
+                indexed_at_ms INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_media_index_hash
+            ON media_index(content_hash_sha256);
+
+            CREATE INDEX IF NOT EXISTS idx_media_index_title_year
+            ON media_index(parsed_title, parsed_year);
+
+            CREATE INDEX IF NOT EXISTS idx_media_index_provider
+            ON media_index(parsed_provider_id);
+        "#,
+        },
+    ]
 }
 
 fn now_ms() -> u128 {
@@ -214,7 +248,7 @@ mod tests {
         let migration_rows: i64 = conn
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .expect("count migration rows");
-        assert_eq!(migration_rows, 1);
+        assert_eq!(migration_rows, LATEST_SCHEMA_VERSION);
 
         fs::remove_file(db_path).expect("cleanup db");
     }
