@@ -161,6 +161,27 @@ docker compose up -d --build
 docker compose exec media-manager sh -lc 'echo MM_LIBRARY_ROOTS=$MM_LIBRARY_ROOTS; ls -la /media; ls -la /media/movies; ls -la /media/tv'
 ```
 
+5. Check write permissions from inside container:
+
+```bash
+docker compose exec media-manager sh -lc 'id; touch /media/movies/.mm-perm-test && rm -f /media/movies/.mm-perm-test'
+docker compose exec media-manager sh -lc 'touch /media/tv/.mm-perm-test && rm -f /media/tv/.mm-perm-test'
+```
+
+If writes fail on NAS mounts, set container user/group in `.env` to match media ownership:
+
+```bash
+MM_PUID=1000
+MM_PGID=1000
+```
+
+Then restart:
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
 4. Confirm app sees the configured roots:
 
 ```bash
