@@ -103,6 +103,7 @@
 	let rollbacking = $state(false);
 	let rollbackOperationIds = $state<string[]>([]);
 	let rollbackResult = $state<BulkRollbackResponse | null>(null);
+	let normalizeNamesOnMerge = $state(true);
 
 	onMount(async () => {
 		await refresh();
@@ -240,12 +241,79 @@
 		if (operationIds.length > 0) {
 			rollbackOperationIds = [...rollbackOperationIds, ...operationIds];
 		}
+		let renameNote = '';
+		if (normalizeNamesOnMerge && result.succeeded > 0) {
+			const renameOutcome = await normalizeSemanticGroupNames(group, uid);
+			if (renameOutcome) {
+				renameNote = ` | rename ok=${renameOutcome.succeeded} fail=${renameOutcome.failed}`;
+			}
+		}
+
 		if (result.failed === 0) {
 			markStageComplete('consolidation');
 		}
-		notice = `Merge complete: uid=${uid} (ok=${result.succeeded}, fail=${result.failed}).`;
+		notice = `Merge complete: uid=${uid} (ok=${result.succeeded}, fail=${result.failed})${renameNote}.`;
 		mergingKey = null;
 		await refresh();
+	}
+
+	async function normalizeSemanticGroupNames(group: SemanticDuplicateGroup, uid: string): Promise<BulkApplyResponse | null> {
+		const preferredTitle = group.parsed_title?.trim();
+		if (!preferredTitle) {
+			return null;
+		}
+
+		const itemsPayload = group.items.map((item) => ({
+			media_path: item.media_path,
+			item_uid: uid,
+			metadata_override: {
+				title: preferredTitle,
+				year: group.parsed_year ?? undefined
+			}
+		}));
+
+		const previewResponse = await apiFetch('/api/bulk/dry-run', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				action: 'rename',
+				items: itemsPayload
+			})
+		});
+		if (!previewResponse.ok) {
+			error = `Rename preview failed: ${await previewResponse.text()}`;
+			return null;
+		}
+
+		const preview = (await previewResponse.json()) as BulkDryRunResponse;
+		if (!preview.plan_ready) {
+			error = 'Rename preview contains invalid items. Resolve naming conflicts before retry.';
+			return null;
+		}
+
+		const applyResponse = await apiFetch('/api/bulk/apply', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				action: 'rename',
+				approved_batch_hash: preview.batch_hash,
+				items: itemsPayload
+			})
+		});
+		if (!applyResponse.ok) {
+			error = `Rename apply failed: ${await applyResponse.text()}`;
+			return null;
+		}
+
+		const applyResult = (await applyResponse.json()) as BulkApplyResponse;
+		const operationIds = applyResult.items
+			.filter((item) => item.success && !!item.operation_id)
+			.map((item) => item.operation_id as string);
+		if (operationIds.length > 0) {
+			rollbackOperationIds = [...rollbackOperationIds, ...operationIds];
+		}
+
+		return applyResult;
 	}
 
 	function formatBytes(bytes: number): string {
@@ -424,6 +492,13 @@
 	<section class="card">
 		<h2>Semantic Duplicate Groups</h2>
 		<p class="mono">Same parsed title/year/provider with multiple file variants.</p>
+		<label class="merge-pref">
+			<input type="checkbox" bind:checked={normalizeNamesOnMerge} />
+			<span>
+				Normalize names during merge (folder/file/linked metadata):
+				<code>Movie Title (Year)</code> with invalid characters replaced by <code>-</code>
+			</span>
+		</label>
 		{#if loading}
 			<p class="mono">Loading semantic groups...</p>
 		{:else if semanticGroups.length === 0}
@@ -545,6 +620,18 @@
 		border-radius: 10px;
 		padding: 0.7rem;
 		background: color-mix(in srgb, var(--card) 87%, transparent);
+	}
+
+	.merge-pref {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.55rem;
+		margin: 0.55rem 0 0.9rem;
+		font-size: 0.9rem;
+	}
+
+	.merge-pref span {
+		color: var(--muted);
 	}
 
 </style>

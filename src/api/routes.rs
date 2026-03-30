@@ -483,7 +483,7 @@ async fn formatting_candidates(
         if !media_path.exists() {
             continue;
         }
-        if let Ok((target, note)) = compute_rename_target(&media_path) {
+        if let Ok((target, note)) = compute_rename_target(&media_path, None) {
             if target != media_path {
                 candidates.push(FormattingCandidateItem {
                     media_path: media_path.display().to_string(),
@@ -1912,7 +1912,7 @@ fn execute_bulk_apply(
 
             match apply_rename_with_rollback(&state.state_dir, &source_path, &target_path) {
                 Ok(operation_id) => {
-                    if let Err(err) = rename_linked_nfo_sidecar(&source_path, &target_path) {
+                    if let Err(err) = rename_linked_sidecar_family(&source_path, &target_path) {
                         let rollback_result = rollback_fs_operation(state, &operation_id);
                         let rollback_note = match rollback_result {
                             Ok(detail) => format!("; media rollback succeeded: {detail}"),
@@ -2265,7 +2265,7 @@ fn build_bulk_preview(
             note,
             error,
         ) = if action == "rename" {
-            match compute_rename_target(&media_path) {
+            match compute_rename_target(&media_path, item.metadata_override.as_ref()) {
                 Ok((target, rename_note)) => (
                     Some(target.display().to_string()),
                     None,
@@ -2507,7 +2507,10 @@ fn derive_item_uid(item: &BulkItemInput, media_path: &std::path::Path) -> String
         .to_string()
 }
 
-fn compute_rename_target(media_path: &std::path::Path) -> Result<(PathBuf, String), String> {
+fn compute_rename_target(
+    media_path: &std::path::Path,
+    metadata_override: Option<&MetadataOverrideInput>,
+) -> Result<(PathBuf, String), String> {
     let parent = media_path
         .parent()
         .ok_or_else(|| "cannot determine rename parent directory".to_string())?;
@@ -2522,7 +2525,7 @@ fn compute_rename_target(media_path: &std::path::Path) -> Result<(PathBuf, Strin
         .and_then(|v| v.to_str())
         .ok_or_else(|| "cannot determine media file stem".to_string())?;
 
-    let inferred = infer_metadata_candidate(media_path, file_stem, None);
+    let inferred = infer_metadata_candidate(media_path, file_stem, metadata_override);
     let normalized_title = normalize_filename_stem(&inferred.title);
     let sanitized_title = sanitize_filename_component(&normalized_title);
     let fallback_title = sanitize_filename_component(&normalize_filename_stem(file_stem));
@@ -2542,7 +2545,13 @@ fn compute_rename_target(media_path: &std::path::Path) -> Result<(PathBuf, Strin
         final_title
     };
 
-    let target = parent.join(format!("{normalized}{extension}"));
+    let target_parent = if should_move_into_canonical_folder(parent, file_stem) {
+        parent.with_file_name(&normalized)
+    } else {
+        parent.to_path_buf()
+    };
+
+    let target = target_parent.join(format!("{normalized}{extension}"));
     if target == media_path {
         return Ok((target, "already matches title/year format".to_string()));
     }
@@ -2559,30 +2568,90 @@ fn compute_rename_target(media_path: &std::path::Path) -> Result<(PathBuf, Strin
 
 fn sanitize_filename_component(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
-    let mut previous_was_space = false;
+    let mut previous_was_separator = false;
 
     for ch in value.chars() {
         let mapped = if matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
-            ' '
+            '-'
         } else {
             ch
         };
 
-        if mapped.is_whitespace() {
-            if !previous_was_space {
-                output.push(' ');
+        if mapped.is_whitespace() || mapped == '-' {
+            if !previous_was_separator {
+                output.push('-');
             }
-            previous_was_space = true;
+            previous_was_separator = true;
         } else {
             output.push(mapped);
-            previous_was_space = false;
+            previous_was_separator = false;
         }
     }
 
-    output.trim().to_string()
+    output.trim_matches('-').to_string()
 }
 
-fn rename_linked_nfo_sidecar(
+fn should_move_into_canonical_folder(parent: &std::path::Path, file_stem: &str) -> bool {
+    let Some(_folder_name) = parent.file_name().and_then(|v| v.to_str()) else {
+        return false;
+    };
+
+    let entries = match fs::read_dir(parent) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let mut media_count = 0_usize;
+    let mut has_subdirs = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            has_subdirs = true;
+            continue;
+        }
+        if !path.is_file() {
+            continue;
+        }
+        let Some(ext) = path.extension().and_then(|v| v.to_str()) else {
+            continue;
+        };
+        let ext = ext.to_ascii_lowercase();
+        if matches!(
+            ext.as_str(),
+            "mkv"
+                | "mp4"
+                | "avi"
+                | "mov"
+                | "wmv"
+                | "m4v"
+                | "mpg"
+                | "mpeg"
+                | "ts"
+                | "m2ts"
+                | "webm"
+        ) {
+            media_count += 1;
+        }
+    }
+
+    if has_subdirs {
+        return false;
+    }
+
+    if media_count != 1 {
+        return false;
+    }
+
+    // Skip moving when the parent is already effectively the same canonical stem.
+    normalize_duplicate_key(
+        parent
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or_default(),
+    ) != normalize_duplicate_key(file_stem)
+}
+
+fn rename_linked_sidecar_family(
     source_media_path: &std::path::Path,
     target_media_path: &std::path::Path,
 ) -> Result<(), String> {
@@ -2593,7 +2662,6 @@ fn rename_linked_nfo_sidecar(
         .parent()
         .ok_or_else(|| "cannot determine target parent directory".to_string())?;
 
-    // Only stem-matching NFO files move with a media rename. movie.nfo stays unchanged.
     let source_stem = source_media_path
         .file_stem()
         .and_then(|v| v.to_str())
@@ -2607,29 +2675,53 @@ fn rename_linked_nfo_sidecar(
         return Ok(());
     }
 
-    let source_nfo = source_parent.join(format!("{source_stem}.nfo"));
-    if !source_nfo.exists() {
-        return Ok(());
+    let mut rename_pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let entries =
+        fs::read_dir(source_parent).map_err(|err| format!("read_dir {} ({err})", source_parent.display()))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("read_dir entry failure ({err})"))?;
+        let source_path = entry.path();
+
+        if source_path == source_media_path || !source_path.is_file() {
+            continue;
+        }
+
+        let Some(stem) = source_path.file_stem().and_then(|v| v.to_str()) else {
+            continue;
+        };
+
+        // Keep folder-level files (like movie.nfo, fanart.jpg) untouched.
+        if stem != source_stem {
+            continue;
+        }
+
+        let target_name = match source_path.extension().and_then(|v| v.to_str()) {
+            Some(ext) => format!("{target_stem}.{ext}"),
+            None => target_stem.to_string(),
+        };
+        let target_path = target_parent.join(target_name);
+        if source_path == target_path {
+            continue;
+        }
+        if target_path.exists() {
+            return Err(format!(
+                "target linked sidecar path already exists ({})",
+                target_path.display()
+            ));
+        }
+        rename_pairs.push((source_path, target_path));
     }
 
-    let target_nfo = target_parent.join(format!("{target_stem}.nfo"));
-    if source_nfo == target_nfo {
-        return Ok(());
+    for (source_path, target_path) in rename_pairs {
+        fs::rename(&source_path, &target_path).map_err(|err| {
+            format!(
+                "failed to rename linked sidecar {} -> {} ({err})",
+                source_path.display(),
+                target_path.display()
+            )
+        })?;
     }
-    if target_nfo.exists() {
-        return Err(format!(
-            "target nfo path already exists ({})",
-            target_nfo.display()
-        ));
-    }
-
-    fs::rename(&source_nfo, &target_nfo).map_err(|err| {
-        format!(
-            "failed to rename linked nfo {} -> {} ({err})",
-            source_nfo.display(),
-            target_nfo.display()
-        )
-    })?;
 
     Ok(())
 }
@@ -3961,7 +4053,7 @@ mod tests {
         compute_rename_target, duplicate_key_for_media_path, ensure_media_file_path_allowed,
         infer_metadata_candidate, normalize_bulk_action, normalize_duplicate_key,
         normalize_filename_stem, normalize_job_status_filter, normalize_library_limit,
-        normalize_recent_limit, rename_linked_nfo_sidecar,
+        normalize_recent_limit, rename_linked_sidecar_family,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -4032,10 +4124,12 @@ mod tests {
     fn rename_target_stays_in_same_parent_and_preserves_extension() {
         let root = unique_temp_dir("rename-target");
         fs::create_dir_all(&root).expect("create root");
-        let media_path = root.join("My.Movie_2024.mkv");
+        let movie_dir = root.join("My Movie (2024)");
+        fs::create_dir_all(&movie_dir).expect("create movie dir");
+        let media_path = movie_dir.join("My.Movie_2024.mkv");
         fs::write(&media_path, b"x").expect("write media file");
 
-        let (target, note) = compute_rename_target(&media_path).expect("rename target computed");
+        let (target, note) = compute_rename_target(&media_path, None).expect("rename target computed");
         assert_eq!(target.parent(), media_path.parent());
         assert_eq!(target.extension().and_then(|v| v.to_str()), Some("mkv"));
         assert_eq!(target.file_name().and_then(|v| v.to_str()), Some("My Movie (2024).mkv"));
@@ -4056,7 +4150,7 @@ mod tests {
         )
         .expect("write nfo");
 
-        let (target, _note) = compute_rename_target(&media_path).expect("rename target computed");
+        let (target, _note) = compute_rename_target(&media_path, None).expect("rename target computed");
         assert_eq!(
             target.file_name().and_then(|v| v.to_str()),
             Some("Actual Movie Name (2022).mkv")
@@ -4066,7 +4160,7 @@ mod tests {
     }
 
     #[test]
-    fn linked_nfo_sidecar_renames_with_media_file() {
+    fn linked_sidecar_family_renames_with_media_file() {
         let root = unique_temp_dir("rename-linked-nfo");
         fs::create_dir_all(&root).expect("create root");
 
@@ -4080,10 +4174,64 @@ mod tests {
         fs::write(&source_nfo, "<movie><title>Old Name</title></movie>").expect("write source nfo");
         fs::write(&movie_nfo, "<movie><title>Folder Movie</title></movie>").expect("write movie.nfo");
 
-        rename_linked_nfo_sidecar(&source_media, &target_media).expect("rename linked nfo");
+        rename_linked_sidecar_family(&source_media, &target_media).expect("rename linked sidecar family");
         assert!(!source_nfo.exists());
         assert!(target_nfo.exists());
         assert!(movie_nfo.exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn linked_sidecar_family_renames_images_and_subtitles() {
+        let root = unique_temp_dir("rename-linked-family");
+        fs::create_dir_all(&root).expect("create root");
+
+        let source_media = root.join("Old Name.mkv");
+        let target_media = root.join("New Name (2024).mkv");
+        let source_poster = root.join("Old Name.jpg");
+        let source_subtitle = root.join("Old Name.srt");
+        let folder_fanart = root.join("fanart.jpg");
+
+        fs::write(&source_media, b"x").expect("write source media");
+        fs::write(&source_poster, b"poster").expect("write poster");
+        fs::write(&source_subtitle, b"subtitle").expect("write subtitle");
+        fs::write(&folder_fanart, b"fanart").expect("write fanart");
+
+        rename_linked_sidecar_family(&source_media, &target_media)
+            .expect("rename linked sidecar family");
+
+        assert!(!source_poster.exists());
+        assert!(!source_subtitle.exists());
+        assert!(root.join("New Name (2024).jpg").exists());
+        assert!(root.join("New Name (2024).srt").exists());
+        assert!(folder_fanart.exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_replaces_invalid_characters_with_dash() {
+        let root = unique_temp_dir("rename-invalid-char");
+        fs::create_dir_all(&root).expect("create root");
+        let movie_dir = root.join("Movie Title (2024)");
+        fs::create_dir_all(&movie_dir).expect("create movie dir");
+        let media_path = movie_dir.join("Movie.Title.2024.mkv");
+        fs::write(&media_path, b"x").expect("write media");
+
+        let override_data = MetadataOverrideInput {
+            title: Some("Movie: Title".to_string()),
+            year: Some(2024),
+            provider_id: None,
+            confidence: None,
+        };
+
+        let (target, _note) =
+            compute_rename_target(&media_path, Some(&override_data)).expect("rename target");
+        assert_eq!(
+            target.file_name().and_then(|v| v.to_str()),
+            Some("Movie-Title (2024).mkv")
+        );
 
         fs::remove_dir_all(root).expect("cleanup");
     }

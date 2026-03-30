@@ -57,6 +57,14 @@
 		};
 	}>();
 
+	let indexStatsState = $state<ApiState<IndexStats>>({ ok: false, error: 'Index stats unavailable.' });
+	let exactDuplicatesState = $state<ApiState<DuplicateGroupsSummary>>({ ok: false, error: 'Duplicate summary unavailable.' });
+	let semanticDuplicatesState = $state<ApiState<DuplicateGroupsSummary>>({ ok: false, error: 'Duplicate summary unavailable.' });
+	let metadataQueueState = $state<ApiState<IndexItemsSummary>>({ ok: false, error: 'Metadata queue unavailable.' });
+	let formattingQueueState = $state<ApiState<FormattingCandidatesSummary>>({ ok: false, error: 'Formatting queue unavailable.' });
+	let recentJobsState = $state<ApiState<RecentJobsResponse>>({ ok: false, error: 'Recent jobs unavailable.' });
+	let refreshedAtIso = $state('');
+
 	let workflowState = $state<WorkflowProgressState>({
 		consolidation: false,
 		metadata: false,
@@ -66,14 +74,14 @@
 	let workflowNotice = $state('Workflow progress sync pending.');
 	let workflowNextHref = $state('/consolidation');
 	let workflowNextLabel = $state('Open Consolidation');
+	let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
 	const scorecards = $derived.by(() => {
-		const indexed = data.indexStats.ok && data.indexStats.data ? data.indexStats.data.total_indexed : 0;
-		const exact = data.exactDuplicates.ok && data.exactDuplicates.data ? data.exactDuplicates.data.total_groups : 0;
-		const semantic =
-			data.semanticDuplicates.ok && data.semanticDuplicates.data ? data.semanticDuplicates.data.total_groups : 0;
-		const metadataQueue = data.metadataQueue.ok && data.metadataQueue.data ? data.metadataQueue.data.total_items : 0;
-		const formattingQueue = data.formattingQueue.ok && data.formattingQueue.data ? data.formattingQueue.data.total_items : 0;
+		const indexed = indexStatsState.ok && indexStatsState.data ? indexStatsState.data.total_indexed : 0;
+		const exact = exactDuplicatesState.ok && exactDuplicatesState.data ? exactDuplicatesState.data.total_groups : 0;
+		const semantic = semanticDuplicatesState.ok && semanticDuplicatesState.data ? semanticDuplicatesState.data.total_groups : 0;
+		const metadataQueue = metadataQueueState.ok && metadataQueueState.data ? metadataQueueState.data.total_items : 0;
+		const formattingQueue = formattingQueueState.ok && formattingQueueState.data ? formattingQueueState.data.total_items : 0;
 
 		return [
 			{ label: 'Indexed Files', value: indexed.toLocaleString(), detail: 'Files currently tracked' },
@@ -88,11 +96,12 @@
 	});
 
 	function computeDashboardHeuristics(): WorkflowProgressState {
-		const indexed = data.indexStats.ok && !!data.indexStats.data && data.indexStats.data.total_indexed > 0;
-		const metadataQueueEmpty = data.metadataQueue.ok && !!data.metadataQueue.data && data.metadataQueue.data.total_items === 0;
+		const indexed = indexStatsState.ok && !!indexStatsState.data && indexStatsState.data.total_indexed > 0;
+		const metadataQueueEmpty =
+			metadataQueueState.ok && !!metadataQueueState.data && metadataQueueState.data.total_items === 0;
 		const formattingQueueEmpty =
-			data.formattingQueue.ok && !!data.formattingQueue.data && data.formattingQueue.data.total_items === 0;
-		const recentJobs: JobRecord[] = data.recentJobs.ok && !!data.recentJobs.data ? data.recentJobs.data.items : [];
+			formattingQueueState.ok && !!formattingQueueState.data && formattingQueueState.data.total_items === 0;
+		const recentJobs: JobRecord[] = recentJobsState.ok && !!recentJobsState.data ? recentJobsState.data.items : [];
 		const hasRunningJobs = recentJobs.some((job: JobRecord) => job.status === 'running');
 		const hasAnyTerminalJobs = recentJobs.some(
 			(job: JobRecord) => job.status === 'succeeded' || job.status === 'failed' || job.status === 'canceled'
@@ -122,15 +131,91 @@
 		workflowNextLabel = `Open ${nextStage.label}`;
 	}
 
-	onMount(() => {
+	function authHeaders(): HeadersInit | undefined {
+		const token = window.localStorage.getItem('mm-api-token');
+		return token ? { Authorization: `Bearer ${token}` } : undefined;
+	}
+
+	async function readJson<T>(path: string): Promise<ApiState<T>> {
+		try {
+			const response = await window.fetch(path, { headers: authHeaders() });
+			if (!response.ok) {
+				return {
+					ok: false,
+					error: `HTTP ${response.status} from ${path}`
+				};
+			}
+			return {
+				ok: true,
+				data: (await response.json()) as T
+			};
+		} catch (error) {
+			return {
+				ok: false,
+				error: error instanceof Error ? error.message : `Unknown error calling ${path}`
+			};
+		}
+	}
+
+	function applyInitialData(): void {
+		indexStatsState = data.indexStats;
+		exactDuplicatesState = data.exactDuplicates;
+		semanticDuplicatesState = data.semanticDuplicates;
+		metadataQueueState = data.metadataQueue;
+		formattingQueueState = data.formattingQueue;
+		recentJobsState = data.recentJobs;
+		refreshedAtIso = data.loadedAt;
+	}
+
+	async function refreshDashboardData(): Promise<void> {
+		const [indexStats, exactDuplicates, semanticDuplicates, metadataQueue, formattingQueue, recentJobs] =
+			await Promise.all([
+				readJson<IndexStats>('/api/index/stats'),
+				readJson<DuplicateGroupsSummary>('/api/consolidation/exact-duplicates?limit=1&min_group_size=2'),
+				readJson<DuplicateGroupsSummary>('/api/consolidation/semantic-duplicates?limit=1&min_group_size=2'),
+				readJson<IndexItemsSummary>('/api/index/items?limit=1&offset=0&only_missing_provider=true&max_confidence=0.95'),
+				readJson<FormattingCandidatesSummary>('/api/formatting/candidates?limit=1&offset=0'),
+				readJson<RecentJobsResponse>('/api/jobs/recent?limit=12')
+			]);
+
+		indexStatsState = indexStats;
+		exactDuplicatesState = exactDuplicates;
+		semanticDuplicatesState = semanticDuplicates;
+		metadataQueueState = metadataQueue;
+		formattingQueueState = formattingQueue;
+		recentJobsState = recentJobs;
+		refreshedAtIso = new Date().toISOString();
 		mergeWorkflowProgress(computeDashboardHeuristics());
+	}
+
+	function hasRunningJobs(): boolean {
+		if (!recentJobsState.ok || !recentJobsState.data) {
+			return false;
+		}
+		return recentJobsState.data.items.some((job) => job.status === 'running');
+	}
+
+	onMount(() => {
+		applyInitialData();
+		mergeWorkflowProgress(computeDashboardHeuristics());
+		void refreshDashboardData();
+		refreshTimer = setInterval(() => {
+			if (hasRunningJobs()) {
+				void refreshDashboardData();
+			}
+		}, 10000);
 
 		const unsubscribe = workflowProgress.subscribe((progress) => {
 			workflowState = progress;
 			updateWorkflowBanner(progress);
 		});
 
-		return unsubscribe;
+		return () => {
+			unsubscribe();
+			if (refreshTimer) {
+				clearInterval(refreshTimer);
+			}
+		};
 	});
 </script>
 
@@ -147,7 +232,7 @@
 				Run staged operations in sequence and keep every action auditable, reversible, and portable beyond this app.
 			</p>
 		</div>
-		<p class="mono stamp">Snapshot: {new Date(data.loadedAt).toLocaleString()}</p>
+		<p class="mono stamp">Snapshot: {new Date(refreshedAtIso).toLocaleString()}</p>
 		<div class="hero-actions">
 			<a href={workflowNextHref}>{workflowNextLabel}</a>
 			<a href="/queue">Inspect Queue</a>
@@ -191,12 +276,12 @@
 				<h2>Recent Jobs</h2>
 				<a href="/queue">Open Full Queue</a>
 			</div>
-			{#if data.recentJobs.ok && data.recentJobs.data}
+			{#if recentJobsState.ok && recentJobsState.data}
 				<ul class="jobs mono">
-					{#if data.recentJobs.data.items.length === 0}
+					{#if recentJobsState.data.items.length === 0}
 						<li><span>No jobs yet</span><strong>Idle</strong></li>
 					{:else}
-						{#each data.recentJobs.data.items.slice(0, 8) as job}
+						{#each recentJobsState.data.items.slice(0, 8) as job}
 							<li>
 								<div>
 									<span>#{job.id} {job.kind}</span>
@@ -210,7 +295,7 @@
 					{/if}
 				</ul>
 			{:else}
-				<p class="error">{data.recentJobs.error ?? 'Unable to read recent jobs.'}</p>
+				<p class="error">{recentJobsState.error ?? 'Unable to read recent jobs.'}</p>
 			{/if}
 		</article>
 	</section>
