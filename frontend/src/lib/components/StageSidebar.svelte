@@ -2,6 +2,7 @@
 	let { currentPath } = $props<{ currentPath: string }>();
 
 	const utilityLinks = [
+		{ href: '/queue', label: 'Queue' },
 		{ href: '/operations', label: 'Operations' },
 		{ href: '/library', label: 'Library (Advanced)' }
 	];
@@ -12,8 +13,11 @@
 </script>
 
 <section class="utility-shell" aria-label="Workflow Utilities">
-	<p class="mono heading">Utilities</p>
-	<div class="utility-links">
+	<div class="intro">
+		<p class="mono heading">Utility Lanes</p>
+		<p>Use Queue for live jobs, Operations for rollback history, and Library for manual inspections.</p>
+	</div>
+	<div class="utility-links" role="navigation" aria-label="Utility Routes">
 		{#each utilityLinks as link}
 			<a href={link.href} class:active={isActive(currentPath, link.href)}>{link.label}</a>
 		{/each}
@@ -22,11 +26,29 @@
 
 <style>
 	.utility-shell {
-		margin: 0.55rem 1rem 0;
+		margin: 0.65rem auto 0;
+		width: min(1160px, 94vw);
+		display: grid;
+		gap: 0.65rem;
+		padding: 0.75rem;
+		border: 1px solid var(--ring);
+		border-radius: 14px;
+		background: color-mix(in srgb, var(--card) 90%, transparent);
+		backdrop-filter: blur(3px);
+	}
+
+	.intro {
 		display: flex;
-		align-items: center;
-		gap: 0.8rem;
+		justify-content: space-between;
+		gap: 0.7rem;
+		align-items: baseline;
 		flex-wrap: wrap;
+	}
+
+	.intro p {
+		margin: 0;
+		font-size: 0.84rem;
+		color: var(--muted);
 	}
 
 	.heading {
@@ -44,16 +66,17 @@
 	}
 
 	a {
-		padding: 0.34rem 0.62rem;
+		padding: 0.38rem 0.66rem;
 		font-size: 0.8rem;
 		text-decoration: none;
 		border-radius: 999px;
-		border: 1px dashed var(--ring);
+		font-weight: 700;
+		border: 1px solid var(--ring);
 		background: color-mix(in srgb, var(--card) 85%, transparent);
 	}
 
 	a.active {
-		border-style: solid;
 		border-color: color-mix(in srgb, var(--accent) 50%, var(--ring));
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
 	}
 </style>

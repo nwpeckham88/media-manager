@@ -67,10 +67,31 @@
 	let workflowNextHref = $state('/consolidation');
 	let workflowNextLabel = $state('Open Consolidation');
 
+	const scorecards = $derived.by(() => {
+		const indexed = data.indexStats.ok && data.indexStats.data ? data.indexStats.data.total_indexed : 0;
+		const exact = data.exactDuplicates.ok && data.exactDuplicates.data ? data.exactDuplicates.data.total_groups : 0;
+		const semantic =
+			data.semanticDuplicates.ok && data.semanticDuplicates.data ? data.semanticDuplicates.data.total_groups : 0;
+		const metadataQueue = data.metadataQueue.ok && data.metadataQueue.data ? data.metadataQueue.data.total_items : 0;
+		const formattingQueue = data.formattingQueue.ok && data.formattingQueue.data ? data.formattingQueue.data.total_items : 0;
+
+		return [
+			{ label: 'Indexed Files', value: indexed.toLocaleString(), detail: 'Files currently tracked' },
+			{
+				label: 'Duplicate Groups',
+				value: (exact + semantic).toLocaleString(),
+				detail: `Exact ${exact} | Semantic ${semantic}`
+			},
+			{ label: 'Metadata Queue', value: metadataQueue.toLocaleString(), detail: 'Needs provider ID confidence' },
+			{ label: 'Formatting Queue', value: formattingQueue.toLocaleString(), detail: 'Rename candidates pending' }
+		];
+	});
+
 	function computeDashboardHeuristics(): WorkflowProgressState {
 		const indexed = data.indexStats.ok && !!data.indexStats.data && data.indexStats.data.total_indexed > 0;
 		const metadataQueueEmpty = data.metadataQueue.ok && !!data.metadataQueue.data && data.metadataQueue.data.total_items === 0;
-		const formattingQueueEmpty = data.formattingQueue.ok && !!data.formattingQueue.data && data.formattingQueue.data.total_items === 0;
+		const formattingQueueEmpty =
+			data.formattingQueue.ok && !!data.formattingQueue.data && data.formattingQueue.data.total_items === 0;
 		const recentJobs: JobRecord[] = data.recentJobs.ok && !!data.recentJobs.data ? data.recentJobs.data.items : [];
 		const hasRunningJobs = recentJobs.some((job: JobRecord) => job.status === 'running');
 		const hasAnyTerminalJobs = recentJobs.some(
@@ -96,7 +117,7 @@
 			return;
 		}
 
-		workflowNotice = `Workflow status: ${completeCount}/4 stages complete. Next recommended stage: ${nextStage.label}.`;
+		workflowNotice = `Workflow status: ${completeCount}/4 complete. Next recommended stage: ${nextStage.label}.`;
 		workflowNextHref = nextStage.path;
 		workflowNextLabel = `Open ${nextStage.label}`;
 	}
@@ -118,105 +139,80 @@
 </svelte:head>
 
 <main class="dashboard-shell">
-	<section class="hero card">
-		<p class="eyebrow">Workflow Hub</p>
-		<h1>Media Library Operations</h1>
-		<p class="lead">Run your staged flow in order: Consolidation -> Metadata -> Formatting -> Verify.</p>
-		<p class="mono stamp">Snapshot loaded at {new Date(data.loadedAt).toLocaleString()}</p>
+	<section class="hero">
+		<div>
+			<p class="eyebrow">Workflow Hub</p>
+			<h1>Operate Your Jellyfin Library With Guardrails</h1>
+			<p class="lead">
+				Run staged operations in sequence and keep every action auditable, reversible, and portable beyond this app.
+			</p>
+		</div>
+		<p class="mono stamp">Snapshot: {new Date(data.loadedAt).toLocaleString()}</p>
 		<div class="hero-actions">
-			<a href="/consolidation">Start/Resume Consolidation</a>
-			<a href="/metadata">Continue Metadata</a>
-			<a href="/formatting">Continue Formatting</a>
-			<a href="/operations">Open Operations</a>
+			<a href={workflowNextHref}>{workflowNextLabel}</a>
+			<a href="/queue">Inspect Queue</a>
+			<a href="/operations">Review Operations</a>
 		</div>
 	</section>
 
 	<OperationResultBanner notice={workflowNotice} nextHref={workflowNextHref} nextLabel={workflowNextLabel} />
 
-	<section class="metrics-grid">
-		<article class="card metric">
-			<p class="mono label">Indexed Files</p>
-			{#if data.indexStats.ok && data.indexStats.data}
-				<h2>{data.indexStats.data.total_indexed}</h2>
-				<p class="mono">hashed={data.indexStats.data.hashed} probed={data.indexStats.data.probed}</p>
-			{:else}
-				<h2>n/a</h2>
-				<p class="error">{data.indexStats.error ?? 'index stats unavailable'}</p>
-			{/if}
-		</article>
-
-		<article class="card metric">
-			<p class="mono label">Duplicate Groups</p>
-			{#if data.exactDuplicates.ok && data.exactDuplicates.data && data.semanticDuplicates.ok && data.semanticDuplicates.data}
-				<h2>{data.exactDuplicates.data.total_groups + data.semanticDuplicates.data.total_groups}</h2>
-				<p class="mono">exact={data.exactDuplicates.data.total_groups} semantic={data.semanticDuplicates.data.total_groups}</p>
-			{:else}
-				<h2>n/a</h2>
-				<p class="error">Unable to summarize duplicate groups.</p>
-			{/if}
-		</article>
-
-		<article class="card metric">
-			<p class="mono label">Metadata Review Queue</p>
-			{#if data.metadataQueue.ok && data.metadataQueue.data}
-				<h2>{data.metadataQueue.data.total_items}</h2>
-				<p class="mono">items missing provider IDs or low-confidence metadata</p>
-			{:else}
-				<h2>n/a</h2>
-				<p class="error">{data.metadataQueue.error ?? 'metadata queue unavailable'}</p>
-			{/if}
-		</article>
-
-		<article class="card metric">
-			<p class="mono label">Formatting Candidates</p>
-			{#if data.formattingQueue.ok && data.formattingQueue.data}
-				<h2>{data.formattingQueue.data.total_items}</h2>
-				<p class="mono">rename candidates from current indexed snapshot</p>
-			{:else}
-				<h2>n/a</h2>
-				<p class="error">{data.formattingQueue.error ?? 'formatting queue unavailable'}</p>
-			{/if}
-		</article>
+	<section class="metrics-grid" aria-label="Library Status Metrics">
+		{#each scorecards as card}
+			<article class="metric-card">
+				<p class="mono metric-label">{card.label}</p>
+				<h2>{card.value}</h2>
+				<p>{card.detail}</p>
+			</article>
+		{/each}
 	</section>
 
-	<section class="card">
-		<h2>Stage Map</h2>
-		<div class="stage-grid">
-			{#each WORKFLOW_STAGES as card}
-				<article class="stage-card">
-					<p class="mono">Stage {card.id}</p>
-					<h3>{card.label}</h3>
-					<p>{card.description}</p>
-					<p class="mono stage-status" class:done={workflowState[card.key]}>
-						{workflowState[card.key] ? 'Complete' : 'Pending'}
-					</p>
-					<a href={card.path}>Open {card.label}</a>
-				</article>
-			{/each}
-		</div>
-	</section>
+	<section class="row-grid">
+		<article class="card stage-map">
+			<div class="split-head">
+				<h2>Stage Map</h2>
+				<a href={workflowNextHref}>Resume Next Stage</a>
+			</div>
+			<div class="stage-grid">
+				{#each WORKFLOW_STAGES as card}
+					<article class="stage-card" class:done={workflowState[card.key]}>
+						<p class="mono">Stage {card.id}</p>
+						<h3>{card.label}</h3>
+						<p>{card.description}</p>
+						<p class="mono stage-status">{workflowState[card.key] ? 'Complete' : 'Pending'}</p>
+						<a href={card.path}>Open {card.label}</a>
+					</article>
+				{/each}
+			</div>
+		</article>
 
-	<section class="card">
-		<div class="split-head">
-			<h2>Recent Jobs</h2>
-			<a href="/queue">Open Full Queue</a>
-		</div>
-		{#if data.recentJobs.ok && data.recentJobs.data}
-			<ul class="jobs mono">
-				{#if data.recentJobs.data.items.length === 0}
-					<li><span>No jobs yet</span><strong>Idle</strong></li>
-				{:else}
-					{#each data.recentJobs.data.items.slice(0, 8) as job}
-						<li>
-							<span>#{job.id} {job.kind}</span>
-							<strong>{workflowLabelFromJobKind(job.kind)} | {job.status}</strong>
-						</li>
-					{/each}
-				{/if}
-			</ul>
-		{:else}
-			<p class="error">{data.recentJobs.error ?? 'Unable to read recent jobs.'}</p>
-		{/if}
+		<article class="card recent-jobs">
+			<div class="split-head">
+				<h2>Recent Jobs</h2>
+				<a href="/queue">Open Full Queue</a>
+			</div>
+			{#if data.recentJobs.ok && data.recentJobs.data}
+				<ul class="jobs mono">
+					{#if data.recentJobs.data.items.length === 0}
+						<li><span>No jobs yet</span><strong>Idle</strong></li>
+					{:else}
+						{#each data.recentJobs.data.items.slice(0, 8) as job}
+							<li>
+								<div>
+									<span>#{job.id} {job.kind}</span>
+									{#if job.error}
+										<small>{job.error}</small>
+									{/if}
+								</div>
+								<strong>{workflowLabelFromJobKind(job.kind)} | {job.status}</strong>
+							</li>
+						{/each}
+					{/if}
+				</ul>
+			{:else}
+				<p class="error">{data.recentJobs.error ?? 'Unable to read recent jobs.'}</p>
+			{/if}
+		</article>
 	</section>
 </main>
 
@@ -226,56 +222,70 @@
 		margin: 1rem auto 3rem;
 		display: grid;
 		gap: 0.9rem;
+		animation: rise 260ms ease-out;
 	}
 
-	.card {
-		background: color-mix(in srgb, var(--card) 92%, transparent);
+	.hero,
+	.card,
+	.metric-card {
 		border: 1px solid var(--ring);
-		border-radius: 14px;
-		padding: 0.95rem;
-		backdrop-filter: blur(2px);
+		border-radius: 16px;
+		padding: 1rem;
+		background: color-mix(in srgb, var(--card) 92%, transparent);
+		box-shadow: var(--shadow);
+	}
+
+	.hero {
+		display: grid;
+		gap: 0.9rem;
+		background:
+			radial-gradient(circle at 88% 8%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 40%),
+			color-mix(in srgb, var(--card) 94%, transparent);
 	}
 
 	.eyebrow {
 		margin: 0;
 		text-transform: uppercase;
-		letter-spacing: 0.12em;
-		font-size: 0.76rem;
+		letter-spacing: 0.13em;
+		font-size: 0.74rem;
 		color: var(--muted);
 		font-weight: 700;
 	}
 
 	h1 {
-		margin: 0.3rem 0;
+		margin: 0.35rem 0;
+		font-size: clamp(1.55rem, 3.2vw, 2.3rem);
+		max-width: 23ch;
 	}
 
 	.lead {
 		margin: 0;
 		color: var(--muted);
+		max-width: 65ch;
 	}
 
 	.stamp {
-		margin: 0.4rem 0 0;
-		font-size: 0.76rem;
+		margin: 0;
+		font-size: 0.77rem;
 		color: var(--muted);
 	}
 
 	.hero-actions {
 		display: flex;
-		flex-wrap: wrap;
 		gap: 0.55rem;
-		margin-top: 0.8rem;
+		flex-wrap: wrap;
 	}
 
 	.hero-actions a,
-	.stage-card a,
-	.split-head a {
+	.split-head a,
+	.stage-card a {
 		border: 1px solid var(--ring);
 		border-radius: 10px;
-		padding: 0.42rem 0.6rem;
+		padding: 0.42rem 0.65rem;
 		text-decoration: none;
 		font-weight: 700;
-		background: color-mix(in srgb, var(--card) 94%, transparent);
+		font-size: 0.84rem;
+		background: color-mix(in srgb, var(--card) 95%, transparent);
 	}
 
 	.metrics-grid {
@@ -284,37 +294,64 @@
 		gap: 0.7rem;
 	}
 
-	.metric h2 {
-		margin: 0.25rem 0;
-		font-size: 2rem;
+	.metric-card h2 {
+		margin: 0.2rem 0;
+		font-size: 2.05rem;
 	}
 
-	.label {
+	.metric-label {
 		margin: 0;
 		font-size: 0.74rem;
-		color: var(--muted);
+		letter-spacing: 0.09em;
 		text-transform: uppercase;
-		letter-spacing: 0.08em;
+		color: var(--muted);
+	}
+
+	.metric-card p {
+		margin: 0;
+		color: var(--muted);
+		font-size: 0.85rem;
+	}
+
+	.row-grid {
+		display: grid;
+		grid-template-columns: 1.65fr 1fr;
+		gap: 0.7rem;
+	}
+
+	.split-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 0.55rem;
+		margin-bottom: 0.65rem;
+	}
+
+	.split-head h2 {
+		margin: 0;
 	}
 
 	.stage-grid {
 		display: grid;
-		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 0.7rem;
+		grid-template-columns: 1fr 1fr;
+		gap: 0.55rem;
 	}
 
 	.stage-card {
+		display: grid;
+		gap: 0.44rem;
 		border: 1px solid var(--ring);
-		border-radius: 10px;
+		border-radius: 12px;
 		padding: 0.72rem;
 		background: color-mix(in srgb, var(--card) 90%, transparent);
-		display: grid;
-		gap: 0.5rem;
+	}
+
+	.stage-card.done {
+		border-color: color-mix(in srgb, var(--accent) 48%, var(--ring));
 	}
 
 	.stage-card h3,
-	.stage-card p,
-	.split-head h2 {
+	.stage-card p {
 		margin: 0;
 	}
 
@@ -323,37 +360,38 @@
 	}
 
 	.stage-status {
-		font-size: 0.75rem;
-		text-transform: uppercase;
+		font-size: 0.74rem;
 		letter-spacing: 0.08em;
+		text-transform: uppercase;
 		font-weight: 700;
-	}
-
-	.stage-status.done {
-		color: var(--accent);
-	}
-
-	.split-head {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		margin-bottom: 0.5rem;
 	}
 
 	.jobs {
 		list-style: none;
-		padding: 0;
 		margin: 0;
+		padding: 0;
 		display: grid;
-		gap: 0.45rem;
+		gap: 0.5rem;
 	}
 
 	.jobs li {
 		display: flex;
 		justify-content: space-between;
-		gap: 0.65rem;
-		padding-bottom: 0.35rem;
+		gap: 0.6rem;
+		padding-bottom: 0.45rem;
 		border-bottom: 1px dashed var(--ring);
+	}
+
+	.jobs span {
+		display: block;
+		font-size: 0.81rem;
+	}
+
+	.jobs small {
+		display: block;
+		margin-top: 0.18rem;
+		font-size: 0.74rem;
+		color: var(--danger);
 	}
 
 	.error {
@@ -362,14 +400,28 @@
 		font-weight: 700;
 	}
 
-	@media (max-width: 1050px) {
-		.metrics-grid,
-		.stage-grid {
-			grid-template-columns: 1fr 1fr;
+	@keyframes rise {
+		from {
+			opacity: 0;
+			transform: translateY(6px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
 		}
 	}
 
-	@media (max-width: 700px) {
+	@media (max-width: 1080px) {
+		.metrics-grid {
+			grid-template-columns: 1fr 1fr;
+		}
+
+		.row-grid {
+			grid-template-columns: 1fr;
+		}
+	}
+
+	@media (max-width: 760px) {
 		.metrics-grid,
 		.stage-grid {
 			grid-template-columns: 1fr;
@@ -378,7 +430,10 @@
 		.split-head {
 			flex-direction: column;
 			align-items: flex-start;
-			gap: 0.5rem;
+		}
+
+		.jobs li {
+			flex-direction: column;
 		}
 	}
 </style>

@@ -45,10 +45,10 @@
 </script>
 
 <section class="workflow-strip" aria-label="Workflow Progress">
-	<p class="mono progress-label">
-		Stage {activeStage.id}/4: {activeStage.label}
-		<span>{activeStage.description}</span>
-	</p>
+	<div class="progress-head">
+		<p class="mono progress-label">Stage {activeStage.id}/4: {activeStage.label}</p>
+		<p>{activeStage.description}</p>
+	</div>
 	<div class="track">
 		{#each WORKFLOW_STAGES as stage, idx}
 			<a
@@ -65,25 +65,33 @@
 
 <style>
 	.workflow-strip {
-		margin: 0.6rem 1rem 0;
-		padding: 0.7rem;
+		width: min(1160px, 94vw);
+		margin: 0.7rem auto 0;
+		padding: 0.8rem;
 		border: 1px solid var(--ring);
-		border-radius: 14px;
+		border-radius: 16px;
 		background: color-mix(in srgb, var(--card) 93%, transparent);
-		backdrop-filter: blur(2px);
+		backdrop-filter: blur(4px);
+	}
+
+	.progress-head {
+		display: flex;
+		justify-content: space-between;
+		gap: 0.6rem;
+		align-items: baseline;
+		flex-wrap: wrap;
+		margin-bottom: 0.55rem;
+	}
+
+	.progress-head p {
+		margin: 0;
+		font-size: 0.84rem;
+		color: var(--muted);
 	}
 
 	.progress-label {
-		margin: 0 0 0.55rem;
-		display: flex;
-		gap: 0.5rem;
-		align-items: baseline;
-		font-size: 0.82rem;
-	}
-
-	.progress-label span {
-		color: var(--muted);
-		font-size: 0.75rem;
+		font-weight: 700;
+		color: var(--text);
 	}
 
 	.track {
@@ -96,11 +104,12 @@
 		display: flex;
 		align-items: center;
 		gap: 0.45rem;
-		padding: 0.45rem 0.55rem;
+		padding: 0.5rem 0.6rem;
 		border-radius: 10px;
 		border: 1px solid var(--ring);
 		text-decoration: none;
-		font-size: 0.78rem;
+		font-size: 0.8rem;
+		font-weight: 700;
 		background: color-mix(in srgb, var(--card) 90%, transparent);
 	}
 
@@ -128,6 +137,10 @@
 	@media (max-width: 860px) {
 		.track {
 			grid-template-columns: 1fr 1fr;
+		}
+
+		.progress-head {
+			align-items: flex-start;
 		}
 	}
 </style>
