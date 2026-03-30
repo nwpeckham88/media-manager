@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import OperationResultBanner from '$lib/components/OperationResultBanner.svelte';
+	import { markStageComplete, markStageIncomplete } from '$lib/workflow/progress';
 
 	type FormattingCandidateItem = {
 		media_path: string;
@@ -140,11 +142,11 @@
 
 	async function applyPreview() {
 		if (!preview) {
-			error = 'Run preview first.';
+			error = 'Run preview before apply.';
 			return;
 		}
 		if (!preview.plan_ready) {
-			error = 'Preview has invalid items. Resolve before apply.';
+			error = 'Preview includes invalid items. Resolve them before apply.';
 			return;
 		}
 
@@ -171,7 +173,10 @@
 		rollbackOperationIds = applyResult.items
 			.filter((item) => item.success && !!item.operation_id)
 			.map((item) => item.operation_id as string);
-		notice = `Rename applied (ok=${applyResult.succeeded}, fail=${applyResult.failed}). Rollback-ready=${rollbackOperationIds.length}`;
+		notice = `Formatting apply complete: ok=${applyResult.succeeded}, fail=${applyResult.failed}. Rollback ready=${rollbackOperationIds.length}.`;
+		if (applyResult.failed === 0) {
+			markStageComplete('formatting');
+		}
 		busy = false;
 		await refresh();
 	}
@@ -197,9 +202,10 @@
 		}
 
 		rollbackResult = (await response.json()) as BulkRollbackResponse;
-		notice = `Rollback finished (ok=${rollbackResult.succeeded}, fail=${rollbackResult.failed}).`;
+		notice = `Rollback complete: ok=${rollbackResult.succeeded}, fail=${rollbackResult.failed}.`;
 		if (rollbackResult.failed === 0) {
 			rollbackOperationIds = [];
+			markStageIncomplete('formatting');
 		}
 		busy = false;
 		await refresh();
@@ -228,6 +234,7 @@
 		<p class="eyebrow">Stage 3</p>
 		<h1>Formatting</h1>
 		<p class="lead">Review deterministic rename candidates generated from the indexed library snapshot before applying formatting operations.</p>
+		<p class="mono policy">Default rename policy: <strong>Movie Name (Year)</strong>. Matching sidecar `.nfo` files remain aligned automatically.</p>
 	</section>
 
 	<section class="card">
@@ -240,11 +247,9 @@
 			<button type="button" onclick={rollbackLastApply} disabled={busy || rollbackOperationIds.length === 0}>Rollback Last Apply</button>
 			<a class="library-link" href="/library">Open Library Rename/NFO Actions</a>
 		</div>
+		<OperationResultBanner notice={notice} error={error} nextHref="/queue" nextLabel="Next: Verify In Queue" />
 
 		<p class="mono">selected={selectedPaths.length}</p>
-		{#if notice}
-			<p class="mono">{notice}</p>
-		{/if}
 		{#if preview}
 			<p class="mono">preview batch={preview.batch_hash} total={preview.total_items} invalid={preview.summary.invalid}</p>
 		{/if}
@@ -253,10 +258,6 @@
 		{/if}
 		{#if rollbackResult}
 			<p class="mono">rollback total={rollbackResult.total_items} ok={rollbackResult.succeeded} fail={rollbackResult.failed}</p>
-		{/if}
-
-		{#if error}
-			<p class="error">{error}</p>
 		{/if}
 
 		{#if loading}
@@ -315,6 +316,12 @@
 		color: var(--muted);
 	}
 
+	.policy {
+		margin: 0.5rem 0 0;
+		font-size: 0.82rem;
+		color: var(--muted);
+	}
+
 	.card {
 		background: color-mix(in srgb, var(--card) 92%, transparent);
 		border: 1px solid var(--ring);
@@ -369,11 +376,6 @@
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		color: var(--muted);
-	}
-
-	.error {
-		color: var(--danger);
-		font-weight: 700;
 	}
 
 </style>

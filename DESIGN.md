@@ -173,13 +173,24 @@ Frontend:
 - SvelteKit app with Tailwind + shadcn-svelte + Bits UI.
 - Branding is runtime-configurable (for example app name, logo path, browser title, sidebar title, and accent palette tokens).
 - Core workflows:
-1. Library browse and inspect.
-2. Plan preview and diff.
-3. Conflict resolution.
-4. Apply monitoring.
-5. Rollback and history.
-6. Rules/presets management.
-7. Compatibility profile selection with manual override control.
+1. Dashboard-first workflow hub (`/`) with stage map and queue/operations deep links.
+2. Consolidation stage for indexing and duplicate control.
+3. Metadata stage for provider ID reconciliation and low-confidence review.
+4. Formatting stage for deterministic `Movie Name (Year)` rename policy.
+5. Verify stage via queue plus centralized operations rollback/history (`/operations`).
+6. Library browse and inspect for advanced/manual exception handling.
+7. Plan preview and diff.
+8. Conflict resolution.
+9. Apply monitoring.
+10. Rules/presets management.
+11. Compatibility profile selection with manual override control.
+
+### 14.1 Workflow Progress Model
+- Workflow completion is persisted client-side for operator continuity between sessions.
+- Progress state is synchronized from both:
+1. API-derived heuristics on dashboard load.
+2. Explicit stage apply/rollback actions in stage and operations views.
+- Rollbacks can mark upstream stages incomplete so operators re-run affected stages deliberately.
 
 ## 15. Storage and Audit
 - Persistent DB for jobs, events, operation plans, conflicts, snapshots.

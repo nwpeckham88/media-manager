@@ -412,7 +412,8 @@
 	<section class="library-hero">
 		<p class="eyebrow">Browse-first management</p>
 		<h1>Library</h1>
-		<p class="lead">Browse all configured roots, search quickly, and stage selections for bulk metadata, dedupe, rename, and NFO workflows.</p>
+		<p class="lead">Advanced utility for manual inspection and targeted fixes. For normal run order use Consolidation -> Metadata -> Formatting first, then return here for exceptions.</p>
+		<p class="mono helper-links"><a href="/">Open Workflow Dashboard</a> | <a href="/operations">Open Operations</a></p>
 	</section>
 
 	<section class="controls card">
@@ -812,6 +813,11 @@
 		padding: 0.55rem;
 		border-bottom: 1px solid var(--ring);
 		text-align: left;
+	}
+
+	.helper-links {
+		margin: 0.55rem 0 0;
+		font-size: 0.82rem;
 	}
 
 	th {

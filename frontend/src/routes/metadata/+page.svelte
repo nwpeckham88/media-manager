@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import OperationResultBanner from '$lib/components/OperationResultBanner.svelte';
+	import { markStageComplete, markStageIncomplete } from '$lib/workflow/progress';
 
 	type IndexedMediaItem = {
 		media_path: string;
@@ -184,11 +186,11 @@
 
 	async function applyPreview() {
 		if (!preview) {
-			error = 'Run preview first.';
+			error = 'Run preview before apply.';
 			return;
 		}
 		if (!preview.plan_ready) {
-			error = 'Preview has invalid items. Resolve before apply.';
+			error = 'Preview includes invalid items. Resolve them before apply.';
 			return;
 		}
 
@@ -215,7 +217,10 @@
 		rollbackOperationIds = applyResult.items
 			.filter((item) => item.success && !!item.operation_id)
 			.map((item) => item.operation_id as string);
-		notice = `Metadata apply complete (ok=${applyResult.succeeded}, fail=${applyResult.failed}). Rollback-ready=${rollbackOperationIds.length}`;
+		notice = `Metadata apply complete: ok=${applyResult.succeeded}, fail=${applyResult.failed}. Rollback ready=${rollbackOperationIds.length}.`;
+		if (applyResult.failed === 0) {
+			markStageComplete('metadata');
+		}
 		busy = false;
 		await refresh();
 	}
@@ -241,9 +246,10 @@
 		}
 
 		rollbackResult = (await response.json()) as BulkRollbackResponse;
-		notice = `Rollback finished (ok=${rollbackResult.succeeded}, fail=${rollbackResult.failed}).`;
+		notice = `Rollback complete: ok=${rollbackResult.succeeded}, fail=${rollbackResult.failed}.`;
 		if (rollbackResult.failed === 0) {
 			rollbackOperationIds = [];
+			markStageIncomplete('metadata');
 		}
 		busy = false;
 		await refresh();
@@ -287,11 +293,9 @@
 			<button type="button" onclick={rollbackLastApply} disabled={busy || rollbackOperationIds.length === 0}>Rollback Last Apply</button>
 			<a class="library-link" href="/library">Open Library Bulk Editor</a>
 		</div>
+		<OperationResultBanner notice={notice} error={error} nextHref="/formatting" nextLabel="Next: Formatting" />
 
 		<p class="mono">selected={selectedPaths.length}</p>
-		{#if notice}
-			<p class="mono">{notice}</p>
-		{/if}
 		{#if preview}
 			<p class="mono">preview batch={preview.batch_hash} total={preview.total_items} creates={preview.summary.creates} updates={preview.summary.updates} invalid={preview.summary.invalid}</p>
 		{/if}
@@ -302,9 +306,6 @@
 			<p class="mono">rollback total={rollbackResult.total_items} ok={rollbackResult.succeeded} fail={rollbackResult.failed}</p>
 		{/if}
 
-		{#if error}
-			<p class="error">{error}</p>
-		{/if}
 		{#if loading}
 			<p class="mono">Loading metadata candidates...</p>
 		{:else if items.length === 0}
@@ -434,11 +435,6 @@
 
 	.conf {
 		width: 5.6rem;
-	}
-
-	.error {
-		color: var(--danger);
-		font-weight: 700;
 	}
 
 </style>

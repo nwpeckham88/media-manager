@@ -14,15 +14,36 @@ Rust backend + SvelteKit frontend service for Jellyfin-oriented media management
   - Consolidation: index library, detect exact/semantic duplicates, merge IDs, quarantine duplicates
   - Metadata: apply metadata/provider IDs from NFO-first inference
   - Formatting: rename media files to `Movie Name (Year)` defaults
+  - Verify: queue-first audit and rollback confirmation stage
+  - Centralized rollback controls in `/operations` with job-derived rollback IDs
   - In-page rollback controls for recent bulk/stage operations
 - Persistent media index (`media_index`) with hash + ffprobe enrichment for high-confidence duplicate detection
 - Path safety checks (operations only inside configured library roots)
 - Preflight diagnostics endpoint
 - Runtime branding config endpoint
 - Dark/light UI theme toggle with persisted preference
+- Dashboard-first UX (`/`) with guided stage progression and persisted workflow completion state
 - Optional API bearer token auth (`MM_API_TOKEN`)
 - Persistent SQLite audit log for operation history
 - Versioned SQLite schema migrations at startup (`schema_migrations` table)
+
+## Workflow UX flow (current)
+
+- `Dashboard` (`/`) is the primary hub and entrypoint.
+- Stage sequence is `Consolidation -> Metadata -> Formatting -> Verify`.
+- Navigation is hub-and-spoke: stages can be revisited without strict linear locking.
+- `Queue` is the primary verify surface; `Operations` is the centralized rollback/history utility.
+- `Library` is now positioned as an advanced manual tool for exceptions.
+
+### Stage completion heuristics
+
+- Completion state is persisted in browser local storage (`mm-workflow-progress-v1`).
+- Dashboard heuristics auto-sync stage status from API snapshots:
+  - Consolidation complete when indexed item count is non-zero.
+  - Metadata complete when metadata queue is empty.
+  - Formatting complete when formatting queue is empty.
+  - Verify complete when recent jobs have no running entries and include terminal results.
+- Stage apply/rollback actions also update completion state in real time.
 
 ## Local run
 

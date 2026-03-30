@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import OperationResultBanner from '$lib/components/OperationResultBanner.svelte';
+	import {
+		markStageComplete,
+		markStageIncomplete,
+		workflowLabelFromJobKind,
+		workflowStageFromJobKind
+	} from '$lib/workflow/progress';
 
 	type JobRecord = {
 		id: number;
@@ -108,6 +115,11 @@
 		offset = payload.offset;
 		pageSize = payload.limit;
 		jobs = payload.items;
+
+		const hasRunningJobs = payload.items.some((job) => job.status === 'running');
+		if (!hasRunningJobs && payload.items.length > 0) {
+			markStageComplete('verify');
+		}
 		loading = false;
 	}
 
@@ -218,7 +230,7 @@
 		const text = formatJson(value);
 		try {
 			await navigator.clipboard.writeText(text);
-			notice = `${label} copied`;
+			notice = `Copied: ${label}.`;
 		} catch {
 			error = `Unable to copy ${label.toLowerCase()} to clipboard.`;
 		}
@@ -291,6 +303,8 @@
 		}
 
 		await loadJobs();
+		notice = `Cancel requested for job #${jobId}.`;
+		markStageIncomplete('verify');
 		activeJobId = null;
 	}
 
@@ -320,13 +334,15 @@
 		}
 
 		await loadJobs();
+		notice = `Retry started for job #${jobId}.`;
+		markStageIncomplete('verify');
 		activeJobId = null;
 	}
 
 	function rollbackBulkApplyJob(job: JobRecord) {
 		const operationIds = extractOperationIdsFromResult(job.result_json);
 		if (operationIds.length === 0) {
-			error = 'No rollback operation IDs found in this job result.';
+			error = 'No rollback operation IDs were found in this job result.';
 			return;
 		}
 
@@ -357,7 +373,12 @@
 		const payload = (await response.json()) as BulkRollbackResponse;
 		lastRollbackItems = payload.items;
 		await loadJobs();
-		notice = `Rollback finished: ok=${payload.succeeded} fail=${payload.failed}`;
+		notice = `Rollback complete: ok=${payload.succeeded}, fail=${payload.failed}.`;
+		const sourceStage = workflowStageFromJobKind(job.kind);
+		if (sourceStage && sourceStage !== 'verify') {
+			markStageIncomplete(sourceStage);
+		}
+		markStageComplete('verify');
 		activeJobId = null;
 	}
 
@@ -414,9 +435,12 @@
 			total={totalCount} showing {jobs.length === 0 ? 0 : offset + 1}-{Math.min(offset + jobs.length, totalCount)} offset={offset} page_size={pageSize}
 		</p>
 
-		{#if notice}
-			<p class="notice mono">{notice}</p>
-		{/if}
+		<OperationResultBanner
+			notice={notice}
+			error={jobs.length > 0 ? error : ''}
+			nextHref="/operations"
+			nextLabel="Next: Review Operations"
+		/>
 
 		{#if lastRollbackItems.length > 0}
 			<ul class="rows mono rollback-audit-list">
@@ -441,6 +465,7 @@
 					<thead>
 						<tr>
 							<th>ID</th>
+							<th>Stage</th>
 							<th>Kind</th>
 							<th>Status</th>
 							<th>Created</th>
@@ -456,6 +481,7 @@
 							{@const summary = parseBulkSummary(job.result_json)}
 							<tr>
 								<td class="mono">{job.id}</td>
+								<td class="mono">{workflowLabelFromJobKind(job.kind)}</td>
 								<td class="mono">{job.kind}</td>
 								<td><span class={`status ${job.status}`}>{job.status}</span></td>
 								<td class="mono">{new Date(job.created_at_ms).toLocaleString()}</td>
@@ -491,7 +517,7 @@
 							</tr>
 							{#if expandedJobIds.includes(job.id)}
 								<tr class="detail-row">
-									<td colspan="9">
+									<td colspan="10">
 										<div class="detail-grid">
 											{#if job.kind === 'bulk_rollback' && extractRollbackItems(job.result_json).length > 0}
 												<section>
@@ -710,11 +736,6 @@
 
 	.error {
 		color: var(--danger);
-		font-weight: 700;
-	}
-
-	.notice {
-		color: var(--accent);
 		font-weight: 700;
 	}
 

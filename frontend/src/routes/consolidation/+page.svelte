@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import OperationResultBanner from '$lib/components/OperationResultBanner.svelte';
+	import { markStageComplete, markStageIncomplete } from '$lib/workflow/progress';
 
 	type IndexStatsResponse = {
 		total_indexed: number;
@@ -162,7 +164,7 @@
 		}
 
 		const payload = (await response.json()) as { job_id: number };
-		notice = `Index job #${payload.job_id} started. Track progress in Queue.`;
+		notice = `Index started: job #${payload.job_id}. Next: monitor Queue.`;
 		indexing = false;
 		await refresh();
 	}
@@ -211,7 +213,7 @@
 
 		const preview = (await previewResponse.json()) as BulkDryRunResponse;
 		if (!preview.plan_ready) {
-			error = 'Merge preview has invalid items; cannot apply.';
+			error = 'Merge preview includes invalid items. Resolve them before apply.';
 			mergingKey = null;
 			return;
 		}
@@ -238,7 +240,10 @@
 		if (operationIds.length > 0) {
 			rollbackOperationIds = [...rollbackOperationIds, ...operationIds];
 		}
-		notice = `Merged semantic group to uid=${uid} (ok=${result.succeeded}, fail=${result.failed})`;
+		if (result.failed === 0) {
+			markStageComplete('consolidation');
+		}
+		notice = `Merge complete: uid=${uid} (ok=${result.succeeded}, fail=${result.failed}).`;
 		mergingKey = null;
 		await refresh();
 	}
@@ -297,7 +302,10 @@
 		if (operationIds.length > 0) {
 			rollbackOperationIds = [...rollbackOperationIds, ...operationIds];
 		}
-		notice = `Quarantine complete for hash ${group.content_hash.slice(0, 12)}... (ok=${result.succeeded} fail=${result.failed})`;
+		if (result.failed === 0) {
+			markStageComplete('consolidation');
+		}
+		notice = `Quarantine complete: hash ${group.content_hash.slice(0, 12)}... (ok=${result.succeeded}, fail=${result.failed}).`;
 		quarantiningKey = null;
 		await refresh();
 	}
@@ -323,9 +331,10 @@
 		}
 
 		rollbackResult = (await response.json()) as BulkRollbackResponse;
-		notice = `Rollback finished (ok=${rollbackResult.succeeded}, fail=${rollbackResult.failed}).`;
+		notice = `Rollback complete: ok=${rollbackResult.succeeded}, fail=${rollbackResult.failed}.`;
 		if (rollbackResult.failed === 0) {
 			rollbackOperationIds = [];
+			markStageIncomplete('consolidation');
 		}
 		rollbacking = false;
 		await refresh();
@@ -365,15 +374,10 @@
 			</button>
 			<a class="queue-link" href="/queue">Queue</a>
 		</div>
+		<OperationResultBanner notice={notice} error={error} nextHref="/metadata" nextLabel="Next: Metadata" />
 
-		{#if notice}
-			<p class="notice mono">{notice}</p>
-		{/if}
 		{#if rollbackResult}
 			<p class="mono">rollback total={rollbackResult.total_items} ok={rollbackResult.succeeded} fail={rollbackResult.failed}</p>
-		{/if}
-		{#if error}
-			<p class="error">{error}</p>
 		{/if}
 
 		{#if stats}
@@ -543,13 +547,4 @@
 		background: color-mix(in srgb, var(--card) 87%, transparent);
 	}
 
-	.error {
-		color: var(--danger);
-		font-weight: 700;
-	}
-
-	.notice {
-		color: var(--accent);
-		font-weight: 700;
-	}
 </style>
