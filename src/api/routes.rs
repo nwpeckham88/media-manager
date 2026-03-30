@@ -410,10 +410,10 @@ async fn index_items(
         items.push(row.map_err(internal_error)?);
     }
 
-    if let Some(only_missing_provider) = query.only_missing_provider
-        && only_missing_provider
-    {
-        items.retain(|item| item.parsed_provider_id.is_none());
+    if let Some(only_missing_provider) = query.only_missing_provider {
+        if only_missing_provider {
+            items.retain(|item| item.parsed_provider_id.is_none());
+        }
     }
 
     if let Some(min_confidence) = query.min_confidence {
@@ -483,14 +483,14 @@ async fn formatting_candidates(
         if !media_path.exists() {
             continue;
         }
-        if let Ok((target, note)) = compute_rename_target(&media_path)
-            && target != media_path
-        {
-            candidates.push(FormattingCandidateItem {
-                media_path: media_path.display().to_string(),
-                proposed_media_path: target.display().to_string(),
-                note,
-            });
+        if let Ok((target, note)) = compute_rename_target(&media_path) {
+            if target != media_path {
+                candidates.push(FormattingCandidateItem {
+                    media_path: media_path.display().to_string(),
+                    proposed_media_path: target.display().to_string(),
+                    note,
+                });
+            }
         }
     }
 
@@ -3054,10 +3054,10 @@ fn extract_nfo_provider_id(content: &str) -> Option<String> {
         }
     }
 
-    if let Some(tmdbid) = extract_xml_tag_value(content, "tmdbid")
-        && tmdbid.chars().all(|ch| ch.is_ascii_digit())
-    {
-        return Some(format!("tmdb-{tmdbid}"));
+    if let Some(tmdbid) = extract_xml_tag_value(content, "tmdbid") {
+        if tmdbid.chars().all(|ch| ch.is_ascii_digit()) {
+            return Some(format!("tmdb-{tmdbid}"));
+        }
     }
 
     let lower = content.to_ascii_lowercase();
@@ -3199,30 +3199,32 @@ fn extract_year(input: &str) -> (Option<u16>, String) {
     let mut year = None;
     let mut working = input.to_string();
 
-    if let Some(start) = working.rfind('(')
-        && let Some(end_rel) = working[start + 1..].find(')')
-    {
-        let end = start + 1 + end_rel;
-        let candidate = working[start + 1..end].trim();
-        if candidate.len() == 4
-            && let Ok(parsed) = candidate.parse::<u16>()
-            && (1900..=2100).contains(&parsed)
-        {
-            year = Some(parsed);
-            working.replace_range(start..=end, "");
-            return (year, normalize_filename_stem(&working));
+    if let Some(start) = working.rfind('(') {
+        if let Some(end_rel) = working[start + 1..].find(')') {
+            let end = start + 1 + end_rel;
+            let candidate = working[start + 1..end].trim();
+            if candidate.len() == 4 {
+                if let Ok(parsed) = candidate.parse::<u16>() {
+                    if (1900..=2100).contains(&parsed) {
+                        year = Some(parsed);
+                        working.replace_range(start..=end, "");
+                        return (year, normalize_filename_stem(&working));
+                    }
+                }
+            }
         }
     }
 
     for token in input.split_whitespace() {
-        if token.len() == 4
-            && let Ok(parsed) = token.parse::<u16>()
-            && (1900..=2100).contains(&parsed)
-        {
-            year = Some(parsed);
-            let marker = token.to_string();
-            working = working.replace(&marker, " ");
-            break;
+        if token.len() == 4 {
+            if let Ok(parsed) = token.parse::<u16>() {
+                if (1900..=2100).contains(&parsed) {
+                    year = Some(parsed);
+                    let marker = token.to_string();
+                    working = working.replace(&marker, " ");
+                    break;
+                }
+            }
         }
     }
 
