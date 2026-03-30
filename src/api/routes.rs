@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 use crate::audit_store::AuditStore;
 use crate::auth;
 use crate::config::BrandingConfig;
-use crate::domain::sidecar::SidecarState;
+use crate::domain::sidecar::{DesiredMediaState, SidecarState};
 use crate::jobs_store::{JobRecord, JobStatus, JobsStore};
 use crate::operations::{OperationEvent, OperationKind, OperationLog};
 use crate::path_policy;
@@ -357,7 +357,9 @@ async fn index_stats(
         )
         .map_err(internal_error)?;
     let last_indexed_at_ms: Option<i64> = conn
-        .query_row("SELECT MAX(indexed_at_ms) FROM media_index", [], |row| row.get(0))
+        .query_row("SELECT MAX(indexed_at_ms) FROM media_index", [], |row| {
+            row.get(0)
+        })
         .map_err(internal_error)?;
 
     Ok(Json(IndexStatsResponse {
@@ -535,7 +537,8 @@ async fn consolidation_exact_duplicates(
         let (content_hash, count) = row.map_err(internal_error)?;
         let mut item_stmt = conn
             .prepare(
-                "SELECT media_path, file_size, parsed_title, parsed_year, parsed_provider_id
+                "SELECT media_path, file_size, parsed_title, parsed_year, parsed_provider_id,
+                        video_codec, audio_codec, width, height, duration_seconds
                  FROM media_index
                  WHERE content_hash_sha256 = ?1
                  ORDER BY media_path ASC",
@@ -549,6 +552,11 @@ async fn consolidation_exact_duplicates(
                     parsed_title: item_row.get(2)?,
                     parsed_year: item_row.get(3)?,
                     parsed_provider_id: item_row.get(4)?,
+                    video_codec: item_row.get(5)?,
+                    audio_codec: item_row.get(6)?,
+                    width: item_row.get(7)?,
+                    height: item_row.get(8)?,
+                    duration_seconds: item_row.get(9)?,
                 })
             })
             .map_err(internal_error)?;
@@ -615,7 +623,7 @@ async fn consolidation_semantic_duplicates(
         .map_err(internal_error)?;
 
     for row in rows {
-        let (parsed_title, parsed_year, parsed_provider_id, item_count, variant_count) =
+        let (parsed_title, parsed_year, parsed_provider_id, _item_count, _variant_count) =
             row.map_err(internal_error)?;
 
         let mut item_stmt = conn
@@ -651,14 +659,31 @@ async fn consolidation_semantic_duplicates(
             items.push(item.map_err(internal_error)?);
         }
 
-        groups.push(SemanticDuplicateGroup {
-            parsed_title,
-            parsed_year,
-            parsed_provider_id,
-            item_count: item_count.max(0) as usize,
-            variant_count: variant_count.max(0) as usize,
-            items,
-        });
+        for subgroup in partition_semantic_group_items(items, min_group_size.max(2) as usize) {
+            let subgroup_variant_count = subgroup
+                .iter()
+                .map(|item| {
+                    item.content_hash
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or_else(|| item.media_path.clone())
+                })
+                .collect::<std::collections::HashSet<String>>()
+                .len();
+
+            if subgroup_variant_count <= 1 {
+                continue;
+            }
+
+            groups.push(SemanticDuplicateGroup {
+                parsed_title: parsed_title.clone(),
+                parsed_year,
+                parsed_provider_id: parsed_provider_id.clone(),
+                item_count: subgroup.len(),
+                variant_count: subgroup_variant_count,
+                items: subgroup,
+            });
+        }
     }
 
     Ok(Json(SemanticDuplicatesResponse {
@@ -685,7 +710,8 @@ async fn consolidation_quarantine(
         return Err(err);
     }
 
-    let set: std::collections::HashSet<&str> = request.media_paths.iter().map(String::as_str).collect();
+    let set: std::collections::HashSet<&str> =
+        request.media_paths.iter().map(String::as_str).collect();
     if !set.contains(request.keep_media_path.as_str()) {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -938,13 +964,15 @@ fn run_library_index_job(
 
 fn discover_media_files(roots: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
     let allowed = [
-        "mkv", "mp4", "avi", "mov", "m4v", "wmv", "flv", "webm", "ts", "m2ts", "mpg",
-        "mpeg",
+        "mkv", "mp4", "avi", "mov", "m4v", "wmv", "flv", "webm", "ts", "m2ts", "mpg", "mpeg",
     ];
 
     let mut files = Vec::new();
     for root in roots {
-        for entry in walkdir::WalkDir::new(root).into_iter().filter_map(Result::ok) {
+        for entry in walkdir::WalkDir::new(root)
+            .into_iter()
+            .filter_map(Result::ok)
+        {
             if !entry.file_type().is_file() {
                 continue;
             }
@@ -1430,6 +1458,10 @@ async fn upsert_sidecar(
 
     let mut sidecar_state = existing.unwrap_or_else(|| SidecarState::new(request.item_uid.clone()));
     sidecar_state.item_uid = request.item_uid;
+    if let Some(desired_state) = request.desired_state {
+        sidecar_state.preferred_policy_state =
+            serde_json::to_value(desired_state).map_err(internal_error)?;
+    }
 
     let sidecar_path = match sidecar_store::write_sidecar(&media_path, &sidecar_state) {
         Ok(v) => v,
@@ -1490,7 +1522,11 @@ async fn sidecar_dry_run(
         return Err(err);
     }
 
-    let plan = match sidecar_workflow::build_plan(&media_path, &request.item_uid) {
+    let plan = match sidecar_workflow::build_plan_with_desired_state(
+        &media_path,
+        &request.item_uid,
+        request.desired_state.as_ref(),
+    ) {
         Ok(v) => v,
         Err(err) => {
             let response = internal_error(err);
@@ -1550,11 +1586,12 @@ async fn sidecar_apply(
         return Err(err);
     }
 
-    let result = sidecar_workflow::apply_plan(
+    let result = sidecar_workflow::apply_plan_with_desired_state(
         &media_path,
         &request.item_uid,
         &request.plan_hash,
         &state.state_dir,
+        request.desired_state.as_ref(),
     )
     .map_err(|e| match e {
         sidecar_workflow::SidecarWorkflowError::PlanMismatch => {
@@ -2618,17 +2655,7 @@ fn should_move_into_canonical_folder(parent: &std::path::Path, file_stem: &str) 
         let ext = ext.to_ascii_lowercase();
         if matches!(
             ext.as_str(),
-            "mkv"
-                | "mp4"
-                | "avi"
-                | "mov"
-                | "wmv"
-                | "m4v"
-                | "mpg"
-                | "mpeg"
-                | "ts"
-                | "m2ts"
-                | "webm"
+            "mkv" | "mp4" | "avi" | "mov" | "wmv" | "m4v" | "mpg" | "mpeg" | "ts" | "m2ts" | "webm"
         ) {
             media_count += 1;
         }
@@ -2676,29 +2703,50 @@ fn rename_linked_sidecar_family(
     }
 
     let mut rename_pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let entries =
-        fs::read_dir(source_parent).map_err(|err| format!("read_dir {} ({err})", source_parent.display()))?;
+    let entries = fs::read_dir(source_parent)
+        .map_err(|err| format!("read_dir {} ({err})", source_parent.display()))?;
 
     for entry in entries {
         let entry = entry.map_err(|err| format!("read_dir entry failure ({err})"))?;
         let source_path = entry.path();
 
-        if source_path == source_media_path || !source_path.is_file() {
+        if source_path == source_media_path {
             continue;
         }
 
-        let Some(stem) = source_path.file_stem().and_then(|v| v.to_str()) else {
+        if source_path.is_dir() {
+            let Some(dir_name) = source_path.file_name().and_then(|v| v.to_str()) else {
+                continue;
+            };
+            if !is_trickplay_directory_name(dir_name, source_stem) {
+                continue;
+            }
+            let target_name = rename_trickplay_directory_name(dir_name, source_stem, target_stem);
+            let target_path = target_parent.join(target_name);
+            if source_path == target_path {
+                continue;
+            }
+            if target_path.exists() {
+                return Err(format!(
+                    "target linked sidecar path already exists ({})",
+                    target_path.display()
+                ));
+            }
+            rename_pairs.push((source_path, target_path));
+            continue;
+        }
+
+        if !source_path.is_file() {
+            continue;
+        }
+
+        let Some(file_name) = source_path.file_name().and_then(|v| v.to_str()) else {
             continue;
         };
 
-        // Keep folder-level files (like movie.nfo, fanart.jpg) untouched.
-        if stem != source_stem {
+        let Some(target_name) = linked_family_target_name(file_name, source_stem, target_stem)
+        else {
             continue;
-        }
-
-        let target_name = match source_path.extension().and_then(|v| v.to_str()) {
-            Some(ext) => format!("{target_stem}.{ext}"),
-            None => target_stem.to_string(),
         };
         let target_path = target_parent.join(target_name);
         if source_path == target_path {
@@ -2713,17 +2761,127 @@ fn rename_linked_sidecar_family(
         rename_pairs.push((source_path, target_path));
     }
 
-    for (source_path, target_path) in rename_pairs {
-        fs::rename(&source_path, &target_path).map_err(|err| {
+    if source_parent != target_parent {
+        fs::create_dir_all(target_parent).map_err(|err| {
             format!(
-                "failed to rename linked sidecar {} -> {} ({err})",
-                source_path.display(),
-                target_path.display()
+                "failed to create target parent {} ({err})",
+                target_parent.display()
             )
         })?;
     }
 
+    let mut completed_pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (source_path, target_path) in rename_pairs {
+        if let Err(err) = fs::rename(&source_path, &target_path) {
+            for (completed_source, completed_target) in completed_pairs.iter().rev() {
+                let _ = fs::rename(completed_target, completed_source);
+            }
+            return Err(format!(
+                "failed to rename linked sidecar {} -> {} ({err})",
+                source_path.display(),
+                target_path.display()
+            ));
+        }
+        completed_pairs.push((source_path, target_path));
+    }
+
+    if source_parent != target_parent {
+        let is_empty = fs::read_dir(source_parent)
+            .ok()
+            .and_then(|mut entries| entries.next())
+            .is_none();
+        if is_empty {
+            fs::remove_dir(source_parent).map_err(|err| {
+                format!(
+                    "failed to remove empty source parent {} ({err})",
+                    source_parent.display()
+                )
+            })?;
+        }
+    }
+
     Ok(())
+}
+
+fn linked_family_target_name(
+    file_name: &str,
+    source_stem: &str,
+    target_stem: &str,
+) -> Option<String> {
+    let path = std::path::Path::new(file_name);
+    let stem = path.file_stem().and_then(|v| v.to_str())?;
+    let extension = path
+        .extension()
+        .and_then(|v| v.to_str())
+        .map(|v| v.to_ascii_lowercase());
+    let stem_lower = stem.to_ascii_lowercase();
+
+    let mapped_stem = if stem == source_stem {
+        Some(target_stem.to_string())
+    } else if let Some(rest) = stem.strip_prefix(&format!("{source_stem}.")) {
+        Some(format!("{target_stem}.{rest}"))
+    } else if let Some(rest) = stem.strip_prefix(&format!("{source_stem}-")) {
+        Some(format!("{target_stem}-{rest}"))
+    } else if let Some(rest) = stem.strip_prefix(&format!("{source_stem}_")) {
+        Some(format!("{target_stem}_{rest}"))
+    } else if stem_lower == "movie" && extension.as_deref() == Some("nfo") {
+        Some(format!("{target_stem}-movie"))
+    } else if is_folder_level_image_alias(&stem_lower, extension.as_deref()) {
+        Some(format!("{target_stem}-{stem_lower}"))
+    } else {
+        None
+    }?;
+
+    match extension {
+        Some(ext) => Some(format!("{mapped_stem}.{ext}")),
+        None => Some(mapped_stem),
+    }
+}
+
+fn is_folder_level_image_alias(stem_lower: &str, extension: Option<&str>) -> bool {
+    let Some(ext) = extension else {
+        return false;
+    };
+    if !matches!(ext, "jpg" | "jpeg" | "png" | "webp" | "tbn") {
+        return false;
+    }
+
+    matches!(
+        stem_lower,
+        "poster"
+            | "fanart"
+            | "banner"
+            | "clearlogo"
+            | "clearart"
+            | "landscape"
+            | "thumb"
+            | "logo"
+            | "folder"
+            | "discart"
+            | "disc"
+            | "keyart"
+    )
+}
+
+fn is_trickplay_directory_name(dir_name: &str, source_stem: &str) -> bool {
+    let lower = dir_name.to_ascii_lowercase();
+    let source_lower = source_stem.to_ascii_lowercase();
+    lower.starts_with(&source_lower) && lower.contains("trickplay")
+}
+
+fn rename_trickplay_directory_name(dir_name: &str, source_stem: &str, target_stem: &str) -> String {
+    if let Some(rest) = dir_name.strip_prefix(source_stem) {
+        return format!("{target_stem}{rest}");
+    }
+
+    let lower = dir_name.to_ascii_lowercase();
+    let source_lower = source_stem.to_ascii_lowercase();
+    if let Some(index) = lower.find(&source_lower) {
+        let end = index + source_lower.len();
+        return format!("{}{}{}", &dir_name[..index], target_stem, &dir_name[end..]);
+    }
+
+    dir_name.to_string()
 }
 
 fn normalize_filename_stem(stem: &str) -> String {
@@ -2870,6 +3028,88 @@ fn normalize_duplicate_key(stem: &str) -> String {
         year.map(|v| v.to_string())
             .unwrap_or_else(|| "none".to_string())
     )
+}
+
+fn partition_semantic_group_items(
+    items: Vec<SemanticDuplicateItem>,
+    min_group_size: usize,
+) -> Vec<Vec<SemanticDuplicateItem>> {
+    let mut episode_buckets: HashMap<String, Vec<SemanticDuplicateItem>> = HashMap::new();
+    let mut non_episode_items: Vec<SemanticDuplicateItem> = Vec::new();
+
+    for item in items {
+        let episode_key = extract_episode_signature_from_media_path(&item.media_path);
+        if let Some(key) = episode_key {
+            episode_buckets.entry(key).or_default().push(item);
+        } else {
+            non_episode_items.push(item);
+        }
+    }
+
+    let mut output: Vec<Vec<SemanticDuplicateItem>> = Vec::new();
+    for bucket in episode_buckets.into_values() {
+        if bucket.len() >= min_group_size {
+            output.push(bucket);
+        }
+    }
+
+    if non_episode_items.len() >= min_group_size {
+        output.push(non_episode_items);
+    }
+
+    output
+}
+
+fn extract_episode_signature_from_media_path(media_path: &str) -> Option<String> {
+    let file_name = PathBuf::from(media_path)
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or(media_path)
+        .to_ascii_uppercase();
+
+    let chars: Vec<char> = file_name.chars().collect();
+    let mut i = 0_usize;
+    while i < chars.len() {
+        if chars[i] != 'S' {
+            i += 1;
+            continue;
+        }
+
+        let mut j = i + 1;
+        let season_start = j;
+        while j < chars.len() && chars[j].is_ascii_digit() && j - season_start < 4 {
+            j += 1;
+        }
+        let season_len = j.saturating_sub(season_start);
+        if season_len == 0 || j >= chars.len() || chars[j] != 'E' {
+            i += 1;
+            continue;
+        }
+
+        j += 1;
+        let episode_start = j;
+        while j < chars.len() && chars[j].is_ascii_digit() && j - episode_start < 3 {
+            j += 1;
+        }
+        let episode_len = j.saturating_sub(episode_start);
+        if episode_len == 0 {
+            i += 1;
+            continue;
+        }
+
+        let season_raw: String = chars[season_start..season_start + season_len]
+            .iter()
+            .collect();
+        let episode_raw: String = chars[episode_start..episode_start + episode_len]
+            .iter()
+            .collect();
+
+        let season = season_raw.parse::<u16>().ok()?;
+        let episode = episode_raw.parse::<u16>().ok()?;
+        return Some(format!("S{season:04}E{episode:03}"));
+    }
+
+    None
 }
 
 fn compute_nfo_target(media_path: &std::path::Path) -> Result<(PathBuf, String), String> {
@@ -3063,7 +3303,9 @@ fn build_local_provider_id(title: &str, year: Option<u16>) -> String {
     format!("tmdb-local-{:08x}", (hasher.finish() & 0xffff_ffff))
 }
 
-fn parse_folder_metadata_from_media_path(media_path: &std::path::Path) -> Option<ParsedFolderMetadata> {
+fn parse_folder_metadata_from_media_path(
+    media_path: &std::path::Path,
+) -> Option<ParsedFolderMetadata> {
     let folder_name = media_path.parent()?.file_name()?.to_str()?;
     parse_movie_folder_pattern(folder_name)
 }
@@ -3071,10 +3313,7 @@ fn parse_folder_metadata_from_media_path(media_path: &std::path::Path) -> Option
 fn parse_nfo_metadata_for_media_path(media_path: &std::path::Path) -> Option<ParsedFolderMetadata> {
     let parent = media_path.parent()?;
     let stem = media_path.file_stem().and_then(|v| v.to_str())?;
-    let candidates = [
-        parent.join(format!("{stem}.nfo")),
-        parent.join("movie.nfo"),
-    ];
+    let candidates = [parent.join(format!("{stem}.nfo")), parent.join("movie.nfo")];
 
     for candidate in &candidates {
         if !candidate.exists() || !candidate.is_file() {
@@ -3852,6 +4091,11 @@ struct ExactDuplicateItem {
     parsed_title: Option<String>,
     parsed_year: Option<i64>,
     parsed_provider_id: Option<String>,
+    video_codec: Option<String>,
+    audio_codec: Option<String>,
+    width: Option<i64>,
+    height: Option<i64>,
+    duration_seconds: Option<f64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3904,6 +4148,7 @@ struct ConsolidationQuarantineItemResult {
 struct SidecarUpsertRequest {
     media_path: String,
     item_uid: String,
+    desired_state: Option<DesiredMediaState>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3911,6 +4156,7 @@ struct SidecarApplyRequest {
     media_path: String,
     item_uid: String,
     plan_hash: String,
+    desired_state: Option<DesiredMediaState>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4049,11 +4295,12 @@ mod tests {
 
     use super::{
         BulkItemInput, DEFAULT_LIBRARY_LIMIT, DEFAULT_RECENT_LIMIT, MAX_LIBRARY_LIMIT,
-        MAX_RECENT_LIMIT, MetadataOverrideInput, build_duplicate_groups, compute_nfo_target,
-        compute_rename_target, duplicate_key_for_media_path, ensure_media_file_path_allowed,
+        MAX_RECENT_LIMIT, MetadataOverrideInput, SemanticDuplicateItem, build_duplicate_groups,
+        compute_nfo_target, compute_rename_target, duplicate_key_for_media_path,
+        ensure_media_file_path_allowed, extract_episode_signature_from_media_path,
         infer_metadata_candidate, normalize_bulk_action, normalize_duplicate_key,
         normalize_filename_stem, normalize_job_status_filter, normalize_library_limit,
-        normalize_recent_limit, rename_linked_sidecar_family,
+        normalize_recent_limit, partition_semantic_group_items, rename_linked_sidecar_family,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -4121,7 +4368,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_target_stays_in_same_parent_and_preserves_extension() {
+    fn rename_target_preserves_extension_and_uses_canonical_parent() {
         let root = unique_temp_dir("rename-target");
         fs::create_dir_all(&root).expect("create root");
         let movie_dir = root.join("My Movie (2024)");
@@ -4129,10 +4376,20 @@ mod tests {
         let media_path = movie_dir.join("My.Movie_2024.mkv");
         fs::write(&media_path, b"x").expect("write media file");
 
-        let (target, note) = compute_rename_target(&media_path, None).expect("rename target computed");
-        assert_eq!(target.parent(), media_path.parent());
+        let (target, note) =
+            compute_rename_target(&media_path, None).expect("rename target computed");
+        assert_eq!(
+            target
+                .parent()
+                .and_then(|v| v.file_name())
+                .and_then(|v| v.to_str()),
+            Some("My-Movie (2024)")
+        );
         assert_eq!(target.extension().and_then(|v| v.to_str()), Some("mkv"));
-        assert_eq!(target.file_name().and_then(|v| v.to_str()), Some("My Movie (2024).mkv"));
+        assert_eq!(
+            target.file_name().and_then(|v| v.to_str()),
+            Some("My-Movie (2024).mkv")
+        );
         assert_eq!(note, "will rename to title/year format");
 
         fs::remove_dir_all(root).expect("cleanup");
@@ -4150,10 +4407,11 @@ mod tests {
         )
         .expect("write nfo");
 
-        let (target, _note) = compute_rename_target(&media_path, None).expect("rename target computed");
+        let (target, _note) =
+            compute_rename_target(&media_path, None).expect("rename target computed");
         assert_eq!(
             target.file_name().and_then(|v| v.to_str()),
-            Some("Actual Movie Name (2022).mkv")
+            Some("Actual-Movie-Name (2022).mkv")
         );
 
         fs::remove_dir_all(root).expect("cleanup");
@@ -4169,15 +4427,19 @@ mod tests {
         let source_nfo = root.join("Old Name.nfo");
         let target_nfo = root.join("New Name (2024).nfo");
         let movie_nfo = root.join("movie.nfo");
+        let renamed_movie_nfo = root.join("New Name (2024)-movie.nfo");
 
         fs::write(&source_media, b"x").expect("write source media");
         fs::write(&source_nfo, "<movie><title>Old Name</title></movie>").expect("write source nfo");
-        fs::write(&movie_nfo, "<movie><title>Folder Movie</title></movie>").expect("write movie.nfo");
+        fs::write(&movie_nfo, "<movie><title>Folder Movie</title></movie>")
+            .expect("write movie.nfo");
 
-        rename_linked_sidecar_family(&source_media, &target_media).expect("rename linked sidecar family");
+        rename_linked_sidecar_family(&source_media, &target_media)
+            .expect("rename linked sidecar family");
         assert!(!source_nfo.exists());
         assert!(target_nfo.exists());
-        assert!(movie_nfo.exists());
+        assert!(!movie_nfo.exists());
+        assert!(renamed_movie_nfo.exists());
 
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4205,7 +4467,32 @@ mod tests {
         assert!(!source_subtitle.exists());
         assert!(root.join("New Name (2024).jpg").exists());
         assert!(root.join("New Name (2024).srt").exists());
-        assert!(folder_fanart.exists());
+        assert!(!folder_fanart.exists());
+        assert!(root.join("New Name (2024)-fanart.jpg").exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn linked_sidecar_family_moves_trickplay_folder_when_parent_changes() {
+        let root = unique_temp_dir("rename-linked-trickplay");
+        let old_parent = root.join("Old Folder");
+        let new_parent = root.join("New Folder");
+        fs::create_dir_all(&old_parent).expect("create old parent");
+
+        let source_media = old_parent.join("Old Name.mkv");
+        let target_media = new_parent.join("New Name (2024).mkv");
+        let trickplay_dir = old_parent.join("Old Name-trickplay");
+        fs::create_dir_all(&trickplay_dir).expect("create trickplay dir");
+
+        fs::write(&source_media, b"x").expect("write source media");
+        fs::write(trickplay_dir.join("0001.jpg"), b"frame").expect("write trickplay frame");
+
+        rename_linked_sidecar_family(&source_media, &target_media)
+            .expect("rename linked sidecar family");
+
+        assert!(!trickplay_dir.exists());
+        assert!(new_parent.join("New Name (2024)-trickplay").exists());
 
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4261,10 +4548,7 @@ mod tests {
             normalize_duplicate_key("Movie.Name.2024"),
             "movie name|2024"
         );
-        assert_eq!(
-            groups.get("movie name|2024").map(Vec::len),
-            Some(2)
-        );
+        assert_eq!(groups.get("movie name|2024").map(Vec::len), Some(2));
         assert_eq!(groups.get("other movie|none").map(Vec::len), Some(1));
     }
 
@@ -4355,6 +4639,42 @@ mod tests {
         assert_eq!(key, "exact key movie|2023|tmdb-778899");
 
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn episode_signature_is_extracted_from_media_path() {
+        let path = "/media/tv/MythBusters/Season 2006/MythBusters - S2006E01 - Paper Crossbow.mkv";
+        assert_eq!(
+            extract_episode_signature_from_media_path(path),
+            Some("S2006E001".to_string())
+        );
+    }
+
+    #[test]
+    fn semantic_partition_splits_tv_season_into_episode_buckets() {
+        let items = vec![
+            SemanticDuplicateItem {
+                media_path: "/media/tv/Show/Season 1/Show - S01E01 - A.mkv".to_string(),
+                file_size: 10,
+                content_hash: Some("hash-a".to_string()),
+                video_codec: None,
+                audio_codec: None,
+                width: None,
+                height: None,
+            },
+            SemanticDuplicateItem {
+                media_path: "/media/tv/Show/Season 1/Show - S01E02 - B.mkv".to_string(),
+                file_size: 11,
+                content_hash: Some("hash-b".to_string()),
+                video_codec: None,
+                audio_codec: None,
+                width: None,
+                height: None,
+            },
+        ];
+
+        let buckets = partition_semantic_group_items(items, 2);
+        assert_eq!(buckets.len(), 0);
     }
 
     #[test]

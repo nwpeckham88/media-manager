@@ -77,6 +77,7 @@
 				<a href="/formatting" class:active={isActive(page.url.pathname, '/formatting')}>Formatting</a>
 				<a href="/queue" class:active={isActive(page.url.pathname, '/queue')}>Queue</a>
 				<a href="/operations" class:active={isActive(page.url.pathname, '/operations')}>Operations</a>
+				<a href="/settings" class:active={isActive(page.url.pathname, '/settings')}>Settings</a>
 			</nav>
 		{/if}
 

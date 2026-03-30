@@ -9,6 +9,11 @@
 		type HashingMode,
 		type RenamePreset
 	} from '$lib/workflow/onboarding';
+	import {
+		appSettings,
+		updateAppSettings,
+		type DashboardRefreshPolicy
+	} from '$lib/workflow/settings';
 	import IndexingModeSelector from './IndexingModeSelector.svelte';
 	import LibraryDetectionPanel from './LibraryDetectionPanel.svelte';
 	import RenamePresetSelector from './RenamePresetSelector.svelte';
@@ -22,6 +27,7 @@
 	} from './types';
 
 	const persisted = get(onboardingState);
+	const settings = get(appSettings);
 
 	let {
 		configState,
@@ -36,8 +42,9 @@
 	}>();
 
 	let step = $state<number>(persisted.step);
-	let hashingMode = $state<HashingMode>(persisted.hashingMode);
-	let renamePreset = $state<RenamePreset>(persisted.renamePreset);
+	let hashingMode = $state<HashingMode>(persisted.hashingMode ?? settings.defaultHashingMode);
+	let renamePreset = $state<RenamePreset>(persisted.renamePreset ?? settings.renamePreset);
+	let refreshPolicy = $state<DashboardRefreshPolicy>(settings.dashboardRefreshPolicy);
 	let starting = $state(false);
 	let indexingStarted = $state(false);
 	let startError = $state('');
@@ -157,6 +164,12 @@
 	}
 
 	async function finishSetup() {
+		updateAppSettings({
+			defaultHashingMode: hashingMode,
+			renamePreset,
+			dashboardRefreshPolicy: refreshPolicy
+		});
+
 		updateOnboardingState({
 			step: 4,
 			hashingMode,
@@ -202,6 +215,20 @@
 		{:else}
 			<div class="final-step">
 				<RenamePresetSelector bind:value={renamePreset} />
+				<section class="policy-card" aria-label="Workflow Policy">
+					<p class="mono label">Workflow Policy</p>
+					<p class="muted">
+						Semantic merges always normalize to canonical naming and exact duplicates always require keeper selection.
+					</p>
+					<label>
+						<span>Dashboard Refresh Policy</span>
+						<select bind:value={refreshPolicy}>
+							<option value="running-jobs-only">Only refresh while jobs run (recommended)</option>
+							<option value="always">Always refresh every interval</option>
+							<option value="manual">Manual refresh only</option>
+						</select>
+					</label>
+				</section>
 				{#if indexingStarted || starting || canFinishWithoutStarting || startError}
 					<ScanStatusPanel
 						indexStatsState={localIndexStats}
@@ -279,6 +306,43 @@
 	.final-step {
 		display: grid;
 		gap: 0.9rem;
+	}
+
+	.policy-card {
+		display: grid;
+		gap: 0.45rem;
+		border: 1px solid var(--ring);
+		border-radius: 12px;
+		padding: 0.72rem;
+		background: color-mix(in srgb, var(--card) 94%, transparent);
+	}
+
+	.policy-card .label {
+		margin: 0;
+		font-size: 0.75rem;
+		text-transform: uppercase;
+		letter-spacing: 0.09em;
+		color: var(--muted);
+	}
+
+	.policy-card .muted {
+		margin: 0;
+		font-size: 0.85rem;
+		color: var(--muted);
+	}
+
+	.policy-card label {
+		display: grid;
+		gap: 0.35rem;
+		font-weight: 700;
+	}
+
+	.policy-card select {
+		border: 1px solid var(--ring);
+		border-radius: 8px;
+		padding: 0.42rem 0.5rem;
+		background: color-mix(in srgb, var(--card) 96%, transparent);
+		color: var(--text);
 	}
 
 	.actions {

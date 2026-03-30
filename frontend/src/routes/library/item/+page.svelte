@@ -6,6 +6,33 @@
 		item_uid: string;
 		nfo_state: string;
 		provider_ids: Record<string, string | null>;
+		preferred_policy_state: unknown;
+	};
+
+	type DesiredMediaState = {
+		container: 'mkv' | 'mp4';
+		video: {
+			preferred_codec: 'av1' | 'hevc' | 'h264';
+			minimum_allowed_codec: 'hevc' | 'h264';
+			allow_manual_codec_upgrade: boolean;
+		};
+		audio: {
+			allowed_layouts: Array<'stereo' | 'surround51' | 'surround71'>;
+			require_stereo_track: boolean;
+			add_night_mode_stereo_track: boolean;
+			transcode_stereo_to_opus: boolean;
+			transcode_standard_surround_to_opus: boolean;
+			preserve_object_audio_tracks: boolean;
+			night_mode_target_lufs: number;
+		};
+		subtitles: {
+			keep_existing_subtitles: boolean;
+			require_text_subtitle: boolean;
+		};
+		transcode: {
+			require_manual_approval: boolean;
+			allow_automatic_transcode: boolean;
+		};
 	};
 
 	type SidecarReadResponse = {
@@ -52,6 +79,7 @@
 	let loading = $state(false);
 	let busy = $state(false);
 	let error = $state('');
+	let desiredState = $state<DesiredMediaState>(defaultDesiredMediaState());
 	let confirmDialog = $state<ConfirmDialogState>({
 		open: false,
 		title: '',
@@ -83,6 +111,7 @@
 
 		sidecar = (await response.json()) as SidecarReadResponse;
 		itemUid = sidecar.state?.item_uid ?? deriveItemUidFromPath(mediaPath);
+		desiredState = normalizeDesiredMediaState(sidecar.state?.preferred_policy_state);
 		loading = false;
 	}
 
@@ -92,7 +121,7 @@
 		const response = await apiFetch('/api/sidecar/dry-run', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ media_path: mediaPath, item_uid: itemUid })
+			body: JSON.stringify({ media_path: mediaPath, item_uid: itemUid, desired_state: desiredState })
 		});
 		if (!response.ok) {
 			error = await response.text();
@@ -116,7 +145,12 @@
 		const response = await apiFetch('/api/sidecar/apply', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ media_path: mediaPath, item_uid: itemUid, plan_hash: plan.plan_hash })
+			body: JSON.stringify({
+				media_path: mediaPath,
+				item_uid: itemUid,
+				plan_hash: plan.plan_hash,
+				desired_state: desiredState
+			})
 		});
 		if (!response.ok) {
 			error = await response.text();
@@ -206,6 +240,96 @@
 		return file.replace(/\.[^.]+$/, '');
 	}
 
+	function defaultDesiredMediaState(): DesiredMediaState {
+		return {
+			container: 'mkv',
+			video: {
+				preferred_codec: 'av1',
+				minimum_allowed_codec: 'h264',
+				allow_manual_codec_upgrade: false
+			},
+			audio: {
+				allowed_layouts: ['stereo', 'surround51', 'surround71'],
+				require_stereo_track: true,
+				add_night_mode_stereo_track: false,
+				transcode_stereo_to_opus: true,
+				transcode_standard_surround_to_opus: true,
+				preserve_object_audio_tracks: true,
+				night_mode_target_lufs: -16
+			},
+			subtitles: {
+				keep_existing_subtitles: true,
+				require_text_subtitle: false
+			},
+			transcode: {
+				require_manual_approval: true,
+				allow_automatic_transcode: false
+			}
+		};
+	}
+
+	function normalizeDesiredMediaState(input: unknown): DesiredMediaState {
+		const fallback = defaultDesiredMediaState();
+		if (!input || typeof input !== 'object') {
+			return fallback;
+		}
+
+		const value = input as Partial<DesiredMediaState>;
+		const allowedLayouts = Array.isArray(value.audio?.allowed_layouts)
+			? value.audio?.allowed_layouts.filter((layout): layout is 'stereo' | 'surround51' | 'surround71' =>
+				layout === 'stereo' || layout === 'surround51' || layout === 'surround71'
+			)
+			: fallback.audio.allowed_layouts;
+
+		return {
+			container: value.container === 'mp4' ? 'mp4' : 'mkv',
+			video: {
+				preferred_codec:
+					value.video?.preferred_codec === 'hevc' || value.video?.preferred_codec === 'h264'
+						? value.video.preferred_codec
+						: 'av1',
+				minimum_allowed_codec: value.video?.minimum_allowed_codec === 'hevc' ? 'hevc' : 'h264',
+				allow_manual_codec_upgrade: Boolean(value.video?.allow_manual_codec_upgrade)
+			},
+			audio: {
+				allowed_layouts: allowedLayouts.length > 0 ? allowedLayouts : fallback.audio.allowed_layouts,
+				require_stereo_track:
+					value.audio?.require_stereo_track ?? fallback.audio.require_stereo_track,
+				add_night_mode_stereo_track:
+					value.audio?.add_night_mode_stereo_track ?? fallback.audio.add_night_mode_stereo_track,
+				transcode_stereo_to_opus:
+					value.audio?.transcode_stereo_to_opus ?? fallback.audio.transcode_stereo_to_opus,
+				transcode_standard_surround_to_opus:
+					value.audio?.transcode_standard_surround_to_opus ?? fallback.audio.transcode_standard_surround_to_opus,
+				preserve_object_audio_tracks:
+					value.audio?.preserve_object_audio_tracks ?? fallback.audio.preserve_object_audio_tracks,
+				night_mode_target_lufs:
+					typeof value.audio?.night_mode_target_lufs === 'number'
+						? value.audio.night_mode_target_lufs
+						: fallback.audio.night_mode_target_lufs
+			},
+			subtitles: {
+				keep_existing_subtitles:
+					value.subtitles?.keep_existing_subtitles ?? fallback.subtitles.keep_existing_subtitles,
+				require_text_subtitle:
+					value.subtitles?.require_text_subtitle ?? fallback.subtitles.require_text_subtitle
+			},
+			transcode: {
+				require_manual_approval:
+					value.transcode?.require_manual_approval ?? fallback.transcode.require_manual_approval,
+				allow_automatic_transcode:
+					value.transcode?.allow_automatic_transcode ?? fallback.transcode.allow_automatic_transcode
+			}
+		};
+	}
+
+	function toggleAudioLayout(layout: 'stereo' | 'surround51' | 'surround71') {
+		const hasLayout = desiredState.audio.allowed_layouts.includes(layout);
+		desiredState.audio.allowed_layouts = hasLayout
+			? desiredState.audio.allowed_layouts.filter((value) => value !== layout)
+			: [...desiredState.audio.allowed_layouts, layout];
+	}
+
 	async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
 		const headers = new Headers(init?.headers ?? {});
 		const token = localStorage.getItem('mm-api-token');
@@ -251,6 +375,113 @@
 			<span>Item UID</span>
 			<input bind:value={itemUid} placeholder="item uid" />
 		</label>
+
+		<div class="policy-grid">
+			<label>
+				<span>Container</span>
+				<select bind:value={desiredState.container}>
+					<option value="mkv">MKV (default)</option>
+					<option value="mp4">MP4</option>
+				</select>
+			</label>
+
+			<label>
+				<span>Preferred Video Codec</span>
+				<select bind:value={desiredState.video.preferred_codec}>
+					<option value="av1">AV1 (preferred)</option>
+					<option value="hevc">HEVC</option>
+					<option value="h264">H.264</option>
+				</select>
+			</label>
+
+			<label>
+				<span>Minimum Allowed Video Codec</span>
+				<select bind:value={desiredState.video.minimum_allowed_codec}>
+					<option value="h264">H.264 (minimum)</option>
+					<option value="hevc">HEVC</option>
+				</select>
+			</label>
+		</div>
+
+		<div class="checkbox-grid">
+			<label class="check">
+				<input type="checkbox" bind:checked={desiredState.video.allow_manual_codec_upgrade} />
+				<span>Allow manual codec upgrades (for example HEVC -&gt; AV1)</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" bind:checked={desiredState.transcode.require_manual_approval} />
+				<span>Require manual approval before any transcode</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" bind:checked={desiredState.transcode.allow_automatic_transcode} />
+				<span>Allow automatic transcode jobs</span>
+			</label>
+		</div>
+
+		<div class="checkbox-grid">
+			<p class="mono section-title">Allowed audio layouts</p>
+			<label class="check">
+				<input
+					type="checkbox"
+					checked={desiredState.audio.allowed_layouts.includes('stereo')}
+					onchange={() => toggleAudioLayout('stereo')}
+				/>
+				<span>Stereo</span>
+			</label>
+			<label class="check">
+				<input
+					type="checkbox"
+					checked={desiredState.audio.allowed_layouts.includes('surround51')}
+					onchange={() => toggleAudioLayout('surround51')}
+				/>
+				<span>5.1 Surround</span>
+			</label>
+			<label class="check">
+				<input
+					type="checkbox"
+					checked={desiredState.audio.allowed_layouts.includes('surround71')}
+					onchange={() => toggleAudioLayout('surround71')}
+				/>
+				<span>7.1 Surround</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" bind:checked={desiredState.audio.require_stereo_track} />
+				<span>Require at least one stereo track</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" bind:checked={desiredState.audio.add_night_mode_stereo_track} />
+				<span>Add optional night-mode stereo track (loudness envelope)</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" bind:checked={desiredState.audio.transcode_stereo_to_opus} />
+				<span>Default stereo transcode codec: Opus</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" bind:checked={desiredState.audio.transcode_standard_surround_to_opus} />
+				<span>Default 5.1/7.1 transcode codec: Opus</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" bind:checked={desiredState.audio.preserve_object_audio_tracks} />
+				<span>Preserve immersive/object audio (Atmos and similar) by default</span>
+			</label>
+			<label>
+				<span>Night-mode target loudness (LUFS)</span>
+				<input type="number" step="0.5" bind:value={desiredState.audio.night_mode_target_lufs} />
+			</label>
+		</div>
+
+		<div class="checkbox-grid">
+			<p class="mono section-title">Subtitle policy</p>
+			<label class="check">
+				<input type="checkbox" bind:checked={desiredState.subtitles.keep_existing_subtitles} />
+				<span>Keep existing subtitle tracks</span>
+			</label>
+			<label class="check">
+				<input type="checkbox" bind:checked={desiredState.subtitles.require_text_subtitle} />
+				<span>Require at least one text subtitle track</span>
+			</label>
+		</div>
+
 		<div class="actions">
 			<button type="button" disabled={busy} onclick={runDryRun}>Dry-run</button>
 			<button type="button" disabled={busy || !plan} onclick={applyPlan}>Apply</button>
@@ -339,6 +570,7 @@
 	}
 
 	input,
+	select,
 	button {
 		border-radius: 10px;
 		border: 1px solid var(--ring);
@@ -357,6 +589,35 @@
 	button {
 		cursor: pointer;
 		font-weight: 600;
+	}
+
+	.policy-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+		gap: 0.7rem;
+		margin-top: 0.9rem;
+	}
+
+	.checkbox-grid {
+		display: grid;
+		gap: 0.35rem;
+		margin-top: 0.9rem;
+	}
+
+	.check {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		min-width: 100%;
+	}
+
+	.check input[type='checkbox'] {
+		width: auto;
+	}
+
+	.section-title {
+		margin: 0 0 0.2rem;
+		color: var(--muted);
 	}
 
 	button:disabled {

@@ -6,9 +6,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 
-use crate::domain::sidecar::SidecarState;
+use crate::domain::sidecar::{DesiredMediaState, SidecarState};
 use crate::sidecar_store;
 
 static OPERATION_NONCE: AtomicU64 = AtomicU64::new(0);
@@ -73,6 +74,14 @@ pub enum SidecarWorkflowError {
 }
 
 pub fn build_plan(media_path: &Path, item_uid: &str) -> Result<SidecarPlan, SidecarWorkflowError> {
+    build_plan_with_desired_state(media_path, item_uid, None)
+}
+
+pub fn build_plan_with_desired_state(
+    media_path: &Path,
+    item_uid: &str,
+    desired_state: Option<&DesiredMediaState>,
+) -> Result<SidecarPlan, SidecarWorkflowError> {
     let sidecar_path = sidecar_store::sidecar_path_for_media(media_path)
         .map_err(|e| SidecarWorkflowError::Store(e.to_string()))?;
 
@@ -84,9 +93,18 @@ pub fn build_plan(media_path: &Path, item_uid: &str) -> Result<SidecarPlan, Side
         .unwrap_or_else(|| SidecarState::new(item_uid.to_string()));
     next_state.item_uid = item_uid.to_string();
 
+    if let Some(desired) = desired_state {
+        next_state.preferred_policy_state = desired_state_to_value(desired)?;
+    }
+
     let action = match &existing_state {
         None => SidecarPlanAction::Create,
-        Some(current) if current.item_uid != item_uid => SidecarPlanAction::Update,
+        Some(current)
+            if current.item_uid != item_uid
+                || current.preferred_policy_state != next_state.preferred_policy_state =>
+        {
+            SidecarPlanAction::Update
+        }
         Some(_) => SidecarPlanAction::Noop,
     };
 
@@ -108,7 +126,17 @@ pub fn apply_plan(
     approved_plan_hash: &str,
     state_dir: &Path,
 ) -> Result<SidecarApplyResult, SidecarWorkflowError> {
-    let plan = build_plan(media_path, item_uid)?;
+    apply_plan_with_desired_state(media_path, item_uid, approved_plan_hash, state_dir, None)
+}
+
+pub fn apply_plan_with_desired_state(
+    media_path: &Path,
+    item_uid: &str,
+    approved_plan_hash: &str,
+    state_dir: &Path,
+    desired_state: Option<&DesiredMediaState>,
+) -> Result<SidecarApplyResult, SidecarWorkflowError> {
+    let plan = build_plan_with_desired_state(media_path, item_uid, desired_state)?;
     if plan.plan_hash != approved_plan_hash {
         return Err(SidecarWorkflowError::PlanMismatch);
     }
@@ -132,6 +160,13 @@ pub fn apply_plan(
         sidecar_path: plan.sidecar_path,
         applied_state: plan.next_state,
     })
+}
+
+fn desired_state_to_value(
+    desired_state: &DesiredMediaState,
+) -> Result<Value, SidecarWorkflowError> {
+    serde_json::to_value(desired_state)
+        .map_err(|e| SidecarWorkflowError::Store(format!("encode desired policy state ({e})")))
 }
 
 pub fn rollback_operation(

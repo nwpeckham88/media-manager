@@ -9,6 +9,7 @@
 		workflowProgress,
 		type WorkflowProgress as WorkflowProgressState
 	} from '$lib/workflow/progress';
+	import { appSettings, type DashboardRefreshPolicy } from '$lib/workflow/settings';
 
 	type JobRecord = {
 		id: number;
@@ -75,6 +76,7 @@
 	let workflowNextHref = $state('/consolidation');
 	let workflowNextLabel = $state('Open Consolidation');
 	let refreshTimer: ReturnType<typeof setInterval> | null = null;
+	let refreshPolicy = $state<DashboardRefreshPolicy>('running-jobs-only');
 
 	const scorecards = $derived.by(() => {
 		const indexed = indexStatsState.ok && indexStatsState.data ? indexStatsState.data.total_indexed : 0;
@@ -196,11 +198,19 @@
 	}
 
 	onMount(() => {
+		const settingsUnsub = appSettings.subscribe((value) => {
+			refreshPolicy = value.dashboardRefreshPolicy;
+		});
+
 		applyInitialData();
 		mergeWorkflowProgress(computeDashboardHeuristics());
 		void refreshDashboardData();
 		refreshTimer = setInterval(() => {
-			if (hasRunningJobs()) {
+			if (refreshPolicy === 'manual') {
+				return;
+			}
+
+			if (refreshPolicy === 'always' || hasRunningJobs()) {
 				void refreshDashboardData();
 			}
 		}, 10000);
@@ -211,6 +221,7 @@
 		});
 
 		return () => {
+			settingsUnsub();
 			unsubscribe();
 			if (refreshTimer) {
 				clearInterval(refreshTimer);

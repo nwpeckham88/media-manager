@@ -4,6 +4,7 @@
 	const utilityLinks = [
 		{ href: '/queue', label: 'Queue' },
 		{ href: '/operations', label: 'Operations' },
+		{ href: '/settings', label: 'Settings' },
 		{ href: '/library', label: 'Library (Advanced)' }
 	];
 

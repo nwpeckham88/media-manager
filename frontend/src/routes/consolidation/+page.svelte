@@ -16,6 +16,11 @@
 		parsed_title: string | null;
 		parsed_year: number | null;
 		parsed_provider_id: string | null;
+		video_codec: string | null;
+		audio_codec: string | null;
+		width: number | null;
+		height: number | null;
+		duration_seconds: number | null;
 	};
 
 	type ExactDuplicateGroup = {
@@ -53,6 +58,17 @@
 		groups: SemanticDuplicateGroup[];
 	};
 
+	type SemanticShowGroup = {
+		key: string;
+		parsed_title: string;
+		parsed_year: number | null;
+		parsed_provider_id: string | null;
+		item_count: number;
+		variant_count: number;
+		bucket_count: number;
+		items: SemanticDuplicateItem[];
+	};
+
 	type ConsolidationQuarantineResponse = {
 		total_items: number;
 		succeeded: number;
@@ -71,6 +87,14 @@
 		summary: {
 			invalid: number;
 		};
+		items: {
+			media_path: string;
+			proposed_media_path: string | null;
+			proposed_item_uid: string | null;
+			can_apply: boolean;
+			note: string | null;
+			error: string | null;
+		}[];
 	};
 
 	type BulkApplyResponse = {
@@ -97,12 +121,28 @@
 	let notice = $state('');
 	let stats = $state<IndexStatsResponse | null>(null);
 	let exactGroups = $state<ExactDuplicateGroup[]>([]);
-	let semanticGroups = $state<SemanticDuplicateGroup[]>([]);
+	let semanticShowGroups = $state<SemanticShowGroup[]>([]);
 	let mergingKey = $state<string | null>(null);
 	let quarantiningKey = $state<string | null>(null);
 	let rollbacking = $state(false);
 	let rollbackOperationIds = $state<string[]>([]);
 	let rollbackResult = $state<BulkRollbackResponse | null>(null);
+	let mergingAllShows = $state(false);
+	let mergeAllProgress = $state('');
+	let semanticPlanByKey = $state<
+		Record<
+			string,
+			{
+				loading: boolean;
+				error: string | null;
+				uid: string;
+				mappings: { from: string; to: string; note: string }[];
+			}
+		>
+	>({});
+	let exactKeepModalOpen = $state(false);
+	let modalGroup = $state<ExactDuplicateGroup | null>(null);
+	let modalKeepPath = $state('');
 
 	onMount(async () => {
 		await refresh();
@@ -144,7 +184,49 @@
 		}
 
 		const payload = (await response.json()) as SemanticDuplicatesResponse;
-		semanticGroups = payload.groups;
+		semanticShowGroups = groupSemanticShowGroups(payload.groups);
+	}
+
+	function semanticGroupKey(group: SemanticDuplicateGroup): string {
+		return `${group.parsed_title}|${group.parsed_year ?? 'none'}|${group.parsed_provider_id ?? 'none'}`;
+	}
+
+	function groupSemanticShowGroups(groups: SemanticDuplicateGroup[]): SemanticShowGroup[] {
+		const map = new Map<string, SemanticShowGroup>();
+
+		for (const group of groups) {
+			const key = semanticGroupKey(group);
+			let show = map.get(key);
+			if (!show) {
+				show = {
+					key,
+					parsed_title: group.parsed_title,
+					parsed_year: group.parsed_year,
+					parsed_provider_id: group.parsed_provider_id,
+					item_count: 0,
+					variant_count: 0,
+					bucket_count: 0,
+					items: []
+				};
+				map.set(key, show);
+			}
+
+			show.bucket_count += 1;
+			for (const item of group.items) {
+				if (show.items.some((existing) => existing.media_path === item.media_path)) {
+					continue;
+				}
+				show.items.push(item);
+			}
+		}
+
+		const output = Array.from(map.values());
+		for (const show of output) {
+			show.item_count = show.items.length;
+			show.variant_count = new Set(show.items.map((item) => item.content_hash ?? item.media_path)).size;
+		}
+
+		return output.sort((a, b) => b.item_count - a.item_count || a.parsed_title.localeCompare(b.parsed_title));
 	}
 
 	async function startIndexing() {
@@ -169,7 +251,7 @@
 		await refresh();
 	}
 
-	function canonicalUidForGroup(group: SemanticDuplicateGroup): string {
+	function canonicalUidForGroup(group: SemanticShowGroup): string {
 		const base = group.parsed_title
 			.toLowerCase()
 			.replace(/[^a-z0-9]+/g, '-')
@@ -177,16 +259,71 @@
 		return `${base}${group.parsed_year ? `-${group.parsed_year}` : ''}`;
 	}
 
-	function groupKey(group: SemanticDuplicateGroup): string {
-		return `${group.parsed_title}|${group.parsed_year ?? 'none'}|${group.parsed_provider_id ?? 'none'}`;
-	}
+	async function loadSemanticMergePlan(group: SemanticShowGroup) {
+		const key = group.key;
+		const uid = canonicalUidForGroup(group);
+		semanticPlanByKey = {
+			...semanticPlanByKey,
+			[key]: { loading: true, error: null, uid, mappings: [] }
+		};
 
-	async function mergeSemanticGroup(group: SemanticDuplicateGroup) {
-		if (group.items.length < 2) {
+		const itemsPayload = group.items.map((item) => ({
+			media_path: item.media_path,
+			item_uid: uid,
+			metadata_override: {
+				title: group.parsed_title,
+				year: group.parsed_year ?? undefined
+			}
+		}));
+
+		const previewResponse = await apiFetch('/api/bulk/dry-run', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({
+				action: 'rename',
+				items: itemsPayload
+			})
+		});
+
+		if (!previewResponse.ok) {
+			semanticPlanByKey = {
+				...semanticPlanByKey,
+				[key]: {
+					loading: false,
+					error: await previewResponse.text(),
+					uid,
+					mappings: []
+				}
+			};
 			return;
 		}
 
-		const key = groupKey(group);
+		const preview = (await previewResponse.json()) as BulkDryRunResponse;
+		const mappings = preview.items
+			.filter((item) => item.proposed_media_path && item.can_apply)
+			.map((item) => ({
+				from: item.media_path,
+				to: item.proposed_media_path as string,
+				note: item.note ?? ''
+			}));
+
+		semanticPlanByKey = {
+			...semanticPlanByKey,
+			[key]: {
+				loading: false,
+				error: preview.plan_ready ? null : 'Plan has invalid items; resolve before merge.',
+				uid,
+				mappings
+			}
+		};
+	}
+
+	async function mergeSemanticGroup(group: SemanticShowGroup): Promise<boolean> {
+		if (group.items.length < 2) {
+			return false;
+		}
+
+		const key = group.key;
 		mergingKey = key;
 		error = '';
 		notice = '';
@@ -208,14 +345,14 @@
 		if (!previewResponse.ok) {
 			error = await previewResponse.text();
 			mergingKey = null;
-			return;
+			return false;
 		}
 
 		const preview = (await previewResponse.json()) as BulkDryRunResponse;
 		if (!preview.plan_ready) {
 			error = 'Merge preview includes invalid items. Resolve them before apply.';
 			mergingKey = null;
-			return;
+			return false;
 		}
 
 		const applyResponse = await apiFetch('/api/bulk/apply', {
@@ -230,7 +367,7 @@
 		if (!applyResponse.ok) {
 			error = await applyResponse.text();
 			mergingKey = null;
-			return;
+			return false;
 		}
 
 		const result = (await applyResponse.json()) as BulkApplyResponse;
@@ -251,12 +388,45 @@
 		if (result.failed === 0) {
 			markStageComplete('consolidation');
 		}
-		notice = `Merge complete: uid=${uid} (ok=${result.succeeded}, fail=${result.failed})${renameNote}.`;
+		notice = `Show merge complete: ${group.parsed_title} uid=${uid} (ok=${result.succeeded}, fail=${result.failed})${renameNote}.`;
 		mergingKey = null;
 		await refresh();
+		return result.failed === 0;
 	}
 
-	async function normalizeSemanticGroupNames(group: SemanticDuplicateGroup, uid: string): Promise<BulkApplyResponse | null> {
+	async function mergeAllSemanticShows() {
+		if (semanticShowGroups.length === 0 || mergingAllShows || mergingKey !== null) {
+			return;
+		}
+
+		mergingAllShows = true;
+		mergeAllProgress = '';
+		error = '';
+		notice = '';
+
+		const total = semanticShowGroups.length;
+		let index = 0;
+		let succeeded = 0;
+
+		for (const group of semanticShowGroups) {
+			index += 1;
+			mergeAllProgress = `Merging show ${index}/${total}: ${group.parsed_title}`;
+			const ok = await mergeSemanticGroup(group);
+			if (ok) {
+				succeeded += 1;
+			}
+		}
+
+		mergingAllShows = false;
+		mergeAllProgress = '';
+		if (error) {
+			notice = `Merge-all partially complete: ok=${succeeded}, fail=${total - succeeded}.`;
+		} else {
+			notice = `Merge-all complete: processed ${total} show groups.`;
+		}
+	}
+
+	async function normalizeSemanticGroupNames(group: SemanticShowGroup, uid: string): Promise<BulkApplyResponse | null> {
 		const preferredTitle = group.parsed_title?.trim();
 		if (!preferredTitle) {
 			return null;
@@ -334,7 +504,55 @@
 		return group.content_hash;
 	}
 
-	async function quarantineExactGroup(group: ExactDuplicateGroup) {
+	function openExactKeepModal(group: ExactDuplicateGroup) {
+		if (group.items.length < 2) {
+			return;
+		}
+
+		modalGroup = group;
+		modalKeepPath = recommendedKeepPath(group);
+		exactKeepModalOpen = true;
+	}
+
+	function closeExactKeepModal() {
+		exactKeepModalOpen = false;
+		modalGroup = null;
+		modalKeepPath = '';
+	}
+
+	function qualityScore(item: ExactDuplicateItem): number {
+		const pixelCount = (item.width ?? 0) * (item.height ?? 0);
+		const duration = item.duration_seconds ?? 0;
+		const sizeMib = item.file_size / (1024 * 1024);
+		return pixelCount * 10 + duration * 4 + sizeMib;
+	}
+
+	function recommendedKeepPath(group: ExactDuplicateGroup): string {
+		if (group.items.length === 0) {
+			return '';
+		}
+
+		let best = group.items[0];
+		let bestScore = qualityScore(best);
+		for (const item of group.items.slice(1)) {
+			const score = qualityScore(item);
+			if (score > bestScore) {
+				best = item;
+				bestScore = score;
+			}
+		}
+
+		return best.media_path;
+	}
+
+	function applyRecommendedKeepSelection() {
+		if (!modalGroup) {
+			return;
+		}
+		modalKeepPath = recommendedKeepPath(modalGroup);
+	}
+
+	async function quarantineExactGroup(group: ExactDuplicateGroup, keepMediaPath: string) {
 		if (group.items.length < 2) {
 			return;
 		}
@@ -344,10 +562,8 @@
 		error = '';
 		notice = '';
 
-		const sortedBySize = [...group.items].sort((a, b) => b.file_size - a.file_size);
-		const keep = sortedBySize[0];
 		const payload = {
-			keep_media_path: keep.media_path,
+			keep_media_path: keepMediaPath,
 			media_paths: group.items.map((item) => item.media_path)
 		};
 
@@ -375,6 +591,30 @@
 		notice = `Quarantine complete: hash ${group.content_hash.slice(0, 12)}... (ok=${result.succeeded}, fail=${result.failed}).`;
 		quarantiningKey = null;
 		await refresh();
+	}
+
+	async function confirmExactKeepSelection() {
+		if (!modalGroup || !modalKeepPath) {
+			return;
+		}
+		const group = modalGroup;
+		const keepPath = modalKeepPath;
+		closeExactKeepModal();
+		await quarantineExactGroup(group, keepPath);
+	}
+
+	function formatDuration(seconds: number | null): string {
+		if (seconds === null || !Number.isFinite(seconds)) {
+			return 'unknown';
+		}
+		const total = Math.max(0, Math.round(seconds));
+		const h = Math.floor(total / 3600);
+		const m = Math.floor((total % 3600) / 60);
+		const s = total % 60;
+		if (h > 0) {
+			return `${h}h ${m}m ${s}s`;
+		}
+		return `${m}m ${s}s`;
 	}
 
 	async function rollbackRecentOps() {
@@ -459,6 +699,7 @@
 
 	<section class="card">
 		<h2>Exact Duplicate Groups</h2>
+		<p class="mono">Choose which file to keep for each exact-hash group. The rest are quarantined.</p>
 		{#if loading}
 			<p class="mono">Loading groups...</p>
 		{:else if exactGroups.length === 0}
@@ -470,48 +711,8 @@
 					<article class="group-card">
 						<p class="mono">hash={group.content_hash.slice(0, 16)}... count={group.count}</p>
 						<div class="actions">
-							<button type="button" onclick={() => quarantineExactGroup(group)} disabled={quarantiningKey !== null && quarantiningKey !== key}>
-								{quarantiningKey === key ? 'Quarantining...' : 'Keep Largest, Quarantine Rest'}
-							</button>
-						</div>
-						<ul class="rows mono">
-							{#each group.items as item}
-								<li>
-									<span>{item.media_path}</span>
-									<strong>{formatBytes(item.file_size)}</strong>
-								</li>
-							{/each}
-						</ul>
-					</article>
-				{/each}
-			</div>
-		{/if}
-	</section>
-
-	<section class="card">
-		<h2>Semantic Duplicate Groups</h2>
-		<p class="mono">Same parsed title/year/provider with multiple file variants.</p>
-		<p class="mono merge-policy">
-			Merge policy: canonical naming is mandatory. All matched items are normalized to
-			<code>Movie Title (Year)</code> with invalid characters replaced by <code>-</code>, and linked stem-matching
-			metadata assets are renamed with the media file.
-		</p>
-		{#if loading}
-			<p class="mono">Loading semantic groups...</p>
-		{:else if semanticGroups.length === 0}
-			<p class="mono">No semantic duplicate groups detected yet.</p>
-		{:else}
-			<div class="group-grid">
-				{#each semanticGroups as group}
-					{@const key = groupKey(group)}
-					<article class="group-card">
-						<p class="mono">
-							title={group.parsed_title} year={group.parsed_year ?? 'unknown'} provider={group.parsed_provider_id ?? 'none'}
-						</p>
-						<p class="mono">items={group.item_count} variants={group.variant_count}</p>
-						<div class="actions">
-							<button type="button" onclick={() => mergeSemanticGroup(group)} disabled={mergingKey !== null && mergingKey !== key}>
-								{mergingKey === key ? 'Merging...' : `Merge IDs -> ${canonicalUidForGroup(group)}`}
+							<button type="button" onclick={() => openExactKeepModal(group)} disabled={quarantiningKey !== null && quarantiningKey !== key}>
+								{quarantiningKey === key ? 'Quarantining...' : 'Choose Keeper + Quarantine Rest'}
 							</button>
 						</div>
 						<ul class="rows mono">
@@ -532,6 +733,133 @@
 			</div>
 		{/if}
 	</section>
+
+	<section class="card">
+		<h2>Semantic Duplicate Groups</h2>
+		<p class="mono">Same parsed title/year/provider with multiple file variants.</p>
+		<p class="mono">Use "Show Planned Result" to preview canonical UID and rename targets before merge.</p>
+		<p class="mono merge-policy">
+			Merge policy: canonical naming is mandatory. All matched items are normalized to
+			<code>Movie Title (Year)</code> with invalid characters replaced by <code>-</code>, and linked stem-matching
+			metadata assets are renamed with the media file.
+		</p>
+		<div class="actions">
+			<button type="button" onclick={mergeAllSemanticShows} disabled={loading || mergingAllShows || mergingKey !== null || semanticShowGroups.length === 0}>
+				{mergingAllShows ? 'Merging All...' : 'Merge All Shows'}
+			</button>
+			{#if mergeAllProgress}
+				<p class="mono merge-progress">{mergeAllProgress}</p>
+			{/if}
+		</div>
+		{#if loading}
+			<p class="mono">Loading semantic groups...</p>
+		{:else if semanticShowGroups.length === 0}
+			<p class="mono">No semantic duplicate groups detected yet.</p>
+		{:else}
+			<div class="group-grid">
+				{#each semanticShowGroups as group}
+					{@const key = group.key}
+					<article class="group-card">
+						<p class="mono">
+							title={group.parsed_title} year={group.parsed_year ?? 'unknown'} provider={group.parsed_provider_id ?? 'none'}
+						</p>
+						<p class="mono">items={group.item_count} variants={group.variant_count} episode-buckets={group.bucket_count}</p>
+						<div class="actions">
+							<button type="button" onclick={() => loadSemanticMergePlan(group)} disabled={mergingKey !== null && mergingKey !== key}>
+								Show Planned Result
+							</button>
+							<button type="button" onclick={() => mergeSemanticGroup(group)} disabled={mergingKey !== null && mergingKey !== key}>
+								{mergingKey === key ? 'Merging...' : `Merge Show -> ${canonicalUidForGroup(group)}`}
+							</button>
+						</div>
+						{#if semanticPlanByKey[key]}
+							<div class="plan-box">
+								<p class="mono">Planned UID: {semanticPlanByKey[key].uid}</p>
+								{#if semanticPlanByKey[key].loading}
+									<p class="mono muted">Loading merge plan...</p>
+								{:else if semanticPlanByKey[key].error}
+									<p class="error">{semanticPlanByKey[key].error}</p>
+								{:else if semanticPlanByKey[key].mappings.length === 0}
+									<p class="mono muted">No rename changes are required for current items.</p>
+								{:else}
+									<ul class="rows mono">
+										{#each semanticPlanByKey[key].mappings.slice(0, 6) as mapping}
+											<li>
+												<span>{mapping.from}</span>
+												<strong>{mapping.to}</strong>
+											</li>
+										{/each}
+									</ul>
+									{#if semanticPlanByKey[key].mappings.length > 6}
+										<p class="mono muted">+{semanticPlanByKey[key].mappings.length - 6} more rename mappings</p>
+									{/if}
+								{/if}
+							</div>
+						{/if}
+						<ul class="rows mono">
+							{#each group.items as item}
+								<li>
+									<span>{item.media_path}</span>
+									<strong>
+										{formatBytes(item.file_size)}
+										{item.width && item.height ? ` | ${item.width}x${item.height}` : ''}
+										{item.video_codec ? ` | v:${item.video_codec}` : ''}
+										{item.audio_codec ? ` | a:${item.audio_codec}` : ''}
+									</strong>
+								</li>
+							{/each}
+						</ul>
+					</article>
+				{/each}
+			</div>
+		{/if}
+	</section>
+
+	{#if exactKeepModalOpen && modalGroup}
+		<div class="modal-backdrop" role="presentation" onclick={(event) => event.target === event.currentTarget && closeExactKeepModal()}>
+			<div class="modal" role="dialog" aria-modal="true" aria-labelledby="keep-title">
+				<h3 id="keep-title">Select File To Keep</h3>
+				<p class="mono modal-note">
+					hash={modalGroup.content_hash.slice(0, 16)}... items={modalGroup.items.length}
+				</p>
+				<ul class="modal-list">
+					{#each modalGroup.items as item}
+						{@const recommended = item.media_path === recommendedKeepPath(modalGroup)}
+						<li class:selected={modalKeepPath === item.media_path}>
+							<label>
+								<input type="radio" name="keep-media" value={item.media_path} bind:group={modalKeepPath} />
+								<div>
+									<p class="mono path">{item.media_path}</p>
+									{#if recommended}
+										<p class="recommended mono">Recommended keeper</p>
+									{/if}
+									<p class="meta">
+										{formatBytes(item.file_size)}
+										{item.width && item.height ? ` | ${item.width}x${item.height}` : ''}
+										{item.video_codec ? ` | v:${item.video_codec}` : ''}
+										{item.audio_codec ? ` | a:${item.audio_codec}` : ''}
+										{` | duration:${formatDuration(item.duration_seconds)}`}
+									</p>
+									{#if item.parsed_title || item.parsed_year || item.parsed_provider_id}
+										<p class="meta muted">
+											{item.parsed_title ?? 'unknown title'}
+											{item.parsed_year ? ` (${item.parsed_year})` : ''}
+											{item.parsed_provider_id ? ` | ${item.parsed_provider_id}` : ''}
+										</p>
+									{/if}
+								</div>
+							</label>
+						</li>
+					{/each}
+				</ul>
+				<div class="actions">
+					<button type="button" class="queue-link" onclick={applyRecommendedKeepSelection}>Use Recommended</button>
+					<button type="button" class="queue-link" onclick={closeExactKeepModal}>Cancel</button>
+					<button type="button" onclick={confirmExactKeepSelection} disabled={!modalKeepPath}>Keep Selected + Quarantine Rest</button>
+				</div>
+			</div>
+		</div>
+	{/if}
 </main>
 
 <style>
@@ -623,6 +951,111 @@
 		margin: 0.55rem 0 0.9rem;
 		font-size: 0.9rem;
 		color: var(--muted);
+	}
+
+	.merge-progress {
+		margin: 0;
+		color: var(--muted);
+	}
+
+	.plan-box {
+		border: 1px solid var(--ring);
+		border-radius: 10px;
+		padding: 0.65rem;
+		margin-bottom: 0.65rem;
+		background: color-mix(in srgb, var(--card) 92%, transparent);
+	}
+
+	.plan-box p {
+		margin: 0;
+	}
+
+	.plan-box .muted {
+		color: var(--muted);
+		margin-top: 0.45rem;
+	}
+
+	.modal-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 35;
+		display: grid;
+		place-items: center;
+		padding: 1rem;
+		background: color-mix(in srgb, #0b1218 48%, transparent);
+		backdrop-filter: blur(3px);
+	}
+
+	.modal {
+		width: min(980px, 94vw);
+		max-height: 88vh;
+		overflow: auto;
+		border: 1px solid var(--ring);
+		border-radius: 14px;
+		padding: 1rem;
+		background: color-mix(in srgb, var(--card) 96%, transparent);
+		display: grid;
+		gap: 0.7rem;
+	}
+
+	.modal h3 {
+		margin: 0;
+	}
+
+	.modal-note {
+		margin: 0;
+		font-size: 0.8rem;
+		color: var(--muted);
+	}
+
+	.modal-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		gap: 0.55rem;
+	}
+
+	.modal-list li {
+		border: 1px solid var(--ring);
+		border-radius: 10px;
+		padding: 0.65rem;
+		background: color-mix(in srgb, var(--card) 92%, transparent);
+	}
+
+	.modal-list li.selected {
+		border-color: color-mix(in srgb, var(--accent) 50%, var(--ring));
+		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 28%, transparent);
+	}
+
+	.modal-list label {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		gap: 0.65rem;
+		align-items: flex-start;
+	}
+
+	.path {
+		margin: 0;
+		font-size: 0.79rem;
+		word-break: break-all;
+	}
+
+	.meta {
+		margin: 0.24rem 0 0;
+		font-size: 0.84rem;
+	}
+
+	.meta.muted {
+		color: var(--muted);
+	}
+
+	.recommended {
+		margin: 0.22rem 0 0;
+		font-size: 0.74rem;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+		color: var(--accent);
 	}
 
 </style>
