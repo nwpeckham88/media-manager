@@ -103,7 +103,6 @@
 	let rollbacking = $state(false);
 	let rollbackOperationIds = $state<string[]>([]);
 	let rollbackResult = $state<BulkRollbackResponse | null>(null);
-	let normalizeNamesOnMerge = $state(true);
 
 	onMount(async () => {
 		await refresh();
@@ -242,10 +241,10 @@
 			rollbackOperationIds = [...rollbackOperationIds, ...operationIds];
 		}
 		let renameNote = '';
-		if (normalizeNamesOnMerge && result.succeeded > 0) {
+		if (result.succeeded > 0) {
 			const renameOutcome = await normalizeSemanticGroupNames(group, uid);
 			if (renameOutcome) {
-				renameNote = ` | rename ok=${renameOutcome.succeeded} fail=${renameOutcome.failed}`;
+				renameNote = ` | canonical rename ok=${renameOutcome.succeeded} fail=${renameOutcome.failed}`;
 			}
 		}
 
@@ -492,13 +491,11 @@
 	<section class="card">
 		<h2>Semantic Duplicate Groups</h2>
 		<p class="mono">Same parsed title/year/provider with multiple file variants.</p>
-		<label class="merge-pref">
-			<input type="checkbox" bind:checked={normalizeNamesOnMerge} />
-			<span>
-				Normalize names during merge (folder/file/linked metadata):
-				<code>Movie Title (Year)</code> with invalid characters replaced by <code>-</code>
-			</span>
-		</label>
+		<p class="mono merge-policy">
+			Merge policy: canonical naming is mandatory. All matched items are normalized to
+			<code>Movie Title (Year)</code> with invalid characters replaced by <code>-</code>, and linked stem-matching
+			metadata assets are renamed with the media file.
+		</p>
 		{#if loading}
 			<p class="mono">Loading semantic groups...</p>
 		{:else if semanticGroups.length === 0}
@@ -622,15 +619,9 @@
 		background: color-mix(in srgb, var(--card) 87%, transparent);
 	}
 
-	.merge-pref {
-		display: flex;
-		align-items: flex-start;
-		gap: 0.55rem;
+	.merge-policy {
 		margin: 0.55rem 0 0.9rem;
 		font-size: 0.9rem;
-	}
-
-	.merge-pref span {
 		color: var(--muted);
 	}
 
