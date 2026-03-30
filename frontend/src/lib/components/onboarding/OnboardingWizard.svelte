@@ -103,7 +103,6 @@
 			}
 
 			indexingStarted = true;
-			step = 4;
 			kickoffPolling();
 		} catch (error) {
 			startError = error instanceof Error ? error.message : 'Unknown error while starting index';
@@ -180,9 +179,11 @@
 			2. Status
 		</button>
 		<button type="button" class:active={step === 3} onclick={() => canAdvanceFromDetection && (step = 3)}>
-			3. Indexing
+			3. Hashing Mode
 		</button>
-		<button type="button" class:active={step === 4} onclick={() => (step = 4)}>4. Naming</button>
+		<button type="button" class:active={step === 4} onclick={() => canAdvanceFromDetection && (step = 4)}>
+			4. Naming + Start
+		</button>
 	</div>
 
 	<div class="stage">
@@ -199,7 +200,18 @@
 		{:else if step === 3}
 			<IndexingModeSelector bind:value={hashingMode} />
 		{:else}
-			<RenamePresetSelector bind:value={renamePreset} />
+			<div class="final-step">
+				<RenamePresetSelector bind:value={renamePreset} />
+				{#if indexingStarted || starting || canFinishWithoutStarting || startError}
+					<ScanStatusPanel
+						indexStatsState={localIndexStats}
+						recentJobsState={localRecentJobs}
+						{indexingStarted}
+						{starting}
+						{startError}
+					/>
+				{/if}
+			</div>
 		{/if}
 	</div>
 
@@ -210,11 +222,11 @@
 			{/if}
 		</div>
 		<div class="right">
-			{#if step < 3}
+			{#if step < 4}
 				<button type="button" onclick={() => (step += 1)} disabled={step === 1 && !canAdvanceFromDetection}>Continue</button>
-			{:else if step === 3}
+			{:else if !indexingStarted && !canFinishWithoutStarting}
 				<button type="button" onclick={startIndexing} disabled={starting}>
-					{starting ? 'Starting...' : 'Start Indexing'}
+					{starting ? 'Starting...' : 'Start Indexing With These Choices'}
 				</button>
 			{:else}
 				<button type="button" onclick={finishSetup} disabled={!indexingStarted && !canFinishWithoutStarting}>
@@ -262,6 +274,11 @@
 		border-radius: 16px;
 		padding: 1rem;
 		background: color-mix(in srgb, var(--card) 94%, transparent);
+	}
+
+	.final-step {
+		display: grid;
+		gap: 0.9rem;
 	}
 
 	.actions {
