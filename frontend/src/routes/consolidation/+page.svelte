@@ -795,7 +795,7 @@
 										{#each semanticPlanByKey[key].mappings.slice(0, 6) as mapping}
 											<li>
 												<span>{mapping.from}</span>
-												<strong>{mapping.to}</strong>
+												<strong>{mapping.to}{mapping.note ? ` | ${mapping.note}` : ''}</strong>
 											</li>
 										{/each}
 									</ul>

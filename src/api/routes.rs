@@ -2641,6 +2641,20 @@ fn compute_rename_target(
     }
 
     if target.exists() {
+        if should_move_parent {
+            if let Some((merge_target, merge_truncated)) =
+                build_merge_collision_target(&target_parent, &normalized, &extension)?
+            {
+                let merge_note = if merge_truncated {
+                    "target exists; will merge into canonical folder with deconflicted filename (truncated to fit filesystem limits)".to_string()
+                } else {
+                    "target exists; will merge into canonical folder with deconflicted filename"
+                        .to_string()
+                };
+                return Ok((merge_target, merge_note));
+            }
+        }
+
         if was_truncated {
             return Err(format!(
                 "rename collision after truncation: target already exists ({})",
@@ -2661,6 +2675,53 @@ fn compute_rename_target(
     };
 
     Ok((target, note))
+}
+
+fn build_merge_collision_target(
+    target_parent: &std::path::Path,
+    canonical_stem: &str,
+    extension: &str,
+) -> Result<Option<(PathBuf, bool)>, String> {
+    for index in 1..=999 {
+        let suffix = if index == 1 {
+            " - alt".to_string()
+        } else {
+            format!(" - alt {index}")
+        };
+        let mut base_title = canonical_stem.trim().to_string();
+        if base_title.is_empty() {
+            base_title = "untitled".to_string();
+        }
+
+        let mut was_truncated = false;
+        loop {
+            let candidate_stem = format!("{base_title}{suffix}");
+            if rename_stem_fits_limits(target_parent, false, &candidate_stem, extension) {
+                let candidate_path = target_parent.join(format!("{candidate_stem}{extension}"));
+                if !candidate_path.exists() {
+                    return Ok(Some((candidate_path, was_truncated)));
+                }
+                break;
+            }
+
+            if base_title == "untitled" {
+                break;
+            }
+
+            was_truncated = true;
+            let Some(_) = base_title.pop() else {
+                break;
+            };
+            base_title = base_title
+                .trim_end_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == '_')
+                .to_string();
+            if base_title.is_empty() {
+                base_title = "untitled".to_string();
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 fn build_rename_stem_with_limits(
@@ -4740,6 +4801,108 @@ mod tests {
     }
 
     #[test]
+    fn rename_target_merges_into_existing_canonical_parent_with_deconflicted_name() {
+        let root = unique_temp_dir("rename-target-merge-collision");
+        fs::create_dir_all(&root).expect("create root");
+
+        let season_dir = root.join("Season 1");
+        let canonical_dir = root.join("Amelia and Wyatt (2025)");
+        fs::create_dir_all(&season_dir).expect("create season dir");
+        fs::create_dir_all(&canonical_dir).expect("create canonical dir");
+
+        let source_media =
+            season_dir.join("Common Side Effects - S01E08 - Amelia and Wyatt [HDTV-1080p].mkv");
+        let occupied_target = canonical_dir.join("Amelia and Wyatt (2025).mkv");
+        fs::write(&source_media, b"source").expect("write source media");
+        fs::write(&occupied_target, b"existing").expect("write occupied target");
+
+        let override_data = MetadataOverrideInput {
+            title: Some("Amelia and Wyatt".to_string()),
+            year: Some(2025),
+            provider_id: None,
+            confidence: None,
+        };
+
+        let (target, note) = compute_rename_target(&source_media, Some(&override_data), true)
+            .expect("rename target computed");
+
+        assert_eq!(target.parent(), Some(canonical_dir.as_path()));
+        assert_ne!(target, occupied_target);
+        assert!(target
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or_default()
+            .contains(" - alt"));
+        assert!(note.contains("merge into canonical folder"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_collision_without_parent_move_still_errors() {
+        let root = unique_temp_dir("rename-target-collision-no-merge");
+        fs::create_dir_all(&root).expect("create root");
+
+        let media_path = root.join("source-file.mkv");
+        let occupied_target = root.join("Amelia and Wyatt (2025).mkv");
+        fs::write(&media_path, b"source").expect("write source media");
+        fs::write(&occupied_target, b"existing").expect("write occupied target");
+
+        let override_data = MetadataOverrideInput {
+            title: Some("Amelia and Wyatt".to_string()),
+            year: Some(2025),
+            provider_id: None,
+            confidence: None,
+        };
+
+        let err = compute_rename_target(&media_path, Some(&override_data), false)
+            .expect_err("collision should remain an error when parent move is disabled");
+        assert!(err.contains("rename collision"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_merge_collision_with_long_title_keeps_alt_suffix() {
+        let root = unique_temp_dir("rename-target-merge-long-title");
+        fs::create_dir_all(&root).expect("create root");
+
+        let season_dir = root.join("Season 1");
+        fs::create_dir_all(&season_dir).expect("create season dir");
+
+        let source_media = season_dir.join("source-file.mkv");
+        fs::write(&source_media, b"source").expect("write source media");
+
+        let long_title = format!("AmeliaAndWyatt{}", "A".repeat(300));
+        let override_data = MetadataOverrideInput {
+            title: Some(long_title),
+            year: Some(2025),
+            provider_id: None,
+            confidence: None,
+        };
+
+        let (occupied_target, _) = compute_rename_target(&source_media, Some(&override_data), true)
+            .expect("first canonical target");
+        if let Some(parent) = occupied_target.parent() {
+            fs::create_dir_all(parent).expect("create canonical parent");
+        }
+        fs::write(&occupied_target, b"occupied").expect("occupy first canonical target");
+
+        let (merge_target, note) = compute_rename_target(&source_media, Some(&override_data), true)
+            .expect("deconflicted merge target");
+
+        assert_ne!(merge_target, occupied_target);
+        assert!(merge_target
+            .file_stem()
+            .and_then(|v| v.to_str())
+            .unwrap_or_default()
+            .contains(" - alt"));
+        assert!(note.contains("merge into canonical folder"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn rename_target_prefers_nfo_title_and_year() {
         let root = unique_temp_dir("rename-target-nfo");
         fs::create_dir_all(&root).expect("create root");
@@ -4950,7 +5113,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_target_reports_explicit_collision_when_truncated_target_exists() {
+    fn rename_target_deconflicts_when_truncated_target_exists() {
         let root = unique_temp_dir("rename-truncation-collision");
         fs::create_dir_all(&root).expect("create root");
         let media_path = root.join("Some.Movie.File.mkv");
@@ -4975,9 +5138,15 @@ mod tests {
         }
         fs::write(&first_target, b"occupied").expect("occupy first target");
 
-        let err = compute_rename_target(&media_path, Some(&override_data), false)
-            .expect_err("truncated collision should return explicit conflict");
-        assert!(err.contains("rename collision after truncation"));
+        let (merge_target, note) = compute_rename_target(&media_path, Some(&override_data), false)
+            .expect("truncated collision should produce deconflicted merge target");
+        assert_ne!(merge_target, first_target);
+        assert!(merge_target
+            .file_stem()
+            .and_then(|v| v.to_str())
+            .unwrap_or_default()
+            .contains(" - alt"));
+        assert!(note.contains("merge into canonical folder"));
 
         fs::remove_dir_all(root).expect("cleanup");
     }
