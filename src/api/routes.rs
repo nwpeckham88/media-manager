@@ -487,7 +487,7 @@ async fn formatting_candidates(
         if !media_path.exists() {
             continue;
         }
-        if let Ok((target, note)) = compute_rename_target(&media_path, None) {
+        if let Ok((target, note)) = compute_rename_target(&media_path, None, false) {
             if target != media_path {
                 candidates.push(FormattingCandidateItem {
                     media_path: media_path.display().to_string(),
@@ -2321,7 +2321,11 @@ fn build_bulk_preview(
             note,
             error,
         ) = if action == "rename" {
-            match compute_rename_target(&media_path, item.metadata_override.as_ref()) {
+            match compute_rename_target(
+                &media_path,
+                item.metadata_override.as_ref(),
+                item.rename_parent_folder.unwrap_or(false),
+            ) {
                 Ok((target, rename_note)) => (
                     Some(target.display().to_string()),
                     None,
@@ -2566,6 +2570,7 @@ fn derive_item_uid(item: &BulkItemInput, media_path: &std::path::Path) -> String
 fn compute_rename_target(
     media_path: &std::path::Path,
     metadata_override: Option<&MetadataOverrideInput>,
+    allow_multi_file_parent_rename: bool,
 ) -> Result<(PathBuf, String), String> {
     let parent = media_path
         .parent()
@@ -2596,14 +2601,30 @@ fn compute_rename_target(
         return Err("rename target stem is empty after normalization".to_string());
     }
 
-    let should_move_parent = should_move_into_canonical_folder(parent, file_stem);
-    let (normalized, was_truncated) = build_rename_stem_with_limits(
+    let (mut normalized, mut was_truncated) = build_rename_stem_with_limits(
         parent,
-        should_move_parent,
+        false,
         &final_title,
         inferred.year,
         &extension,
     )?;
+
+    let should_move_parent = should_move_into_canonical_folder(
+        parent,
+        &normalized,
+        allow_multi_file_parent_rename,
+    );
+    if should_move_parent {
+        let (moved_normalized, moved_was_truncated) = build_rename_stem_with_limits(
+            parent,
+            true,
+            &final_title,
+            inferred.year,
+            &extension,
+        )?;
+        normalized = moved_normalized;
+        was_truncated = was_truncated || moved_was_truncated;
+    }
 
     let target_parent = if should_move_parent {
         parent.with_file_name(&normalized)
@@ -2774,8 +2795,12 @@ fn normalize_title_for_display_name(value: &str) -> String {
         .join(" - ")
 }
 
-fn should_move_into_canonical_folder(parent: &std::path::Path, file_stem: &str) -> bool {
-    let Some(_folder_name) = parent.file_name().and_then(|v| v.to_str()) else {
+fn should_move_into_canonical_folder(
+    parent: &std::path::Path,
+    canonical_stem: &str,
+    allow_multi_file_parent_rename: bool,
+) -> bool {
+    let Some(folder_name) = parent.file_name().and_then(|v| v.to_str()) else {
         return false;
     };
 
@@ -2785,11 +2810,9 @@ fn should_move_into_canonical_folder(parent: &std::path::Path, file_stem: &str) 
     };
 
     let mut media_count = 0_usize;
-    let mut has_subdirs = false;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            has_subdirs = true;
             continue;
         }
         if !path.is_file() {
@@ -2807,21 +2830,20 @@ fn should_move_into_canonical_folder(parent: &std::path::Path, file_stem: &str) 
         }
     }
 
-    if has_subdirs {
+    if media_count == 0 {
         return false;
     }
 
-    if media_count != 1 {
+    if media_count > 1 && !allow_multi_file_parent_rename {
         return false;
     }
 
-    // Skip moving when the parent is already effectively the same canonical stem.
-    normalize_duplicate_key(
-        parent
-            .file_name()
-            .and_then(|v| v.to_str())
-            .unwrap_or_default(),
-    ) != normalize_duplicate_key(file_stem)
+    // Skip moving when the parent already matches the canonical folder name.
+    let normalized_folder = sanitize_display_filename_component(&normalize_title_for_display_name(folder_name));
+    let normalized_canonical =
+        sanitize_display_filename_component(&normalize_title_for_display_name(canonical_stem));
+
+    !normalized_folder.eq_ignore_ascii_case(&normalized_canonical)
 }
 
 fn rename_linked_sidecar_family(
@@ -4352,6 +4374,7 @@ struct BulkItemInput {
     media_path: String,
     item_uid: Option<String>,
     metadata_override: Option<MetadataOverrideInput>,
+    rename_parent_folder: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -4624,7 +4647,7 @@ mod tests {
         fs::write(&media_path, b"x").expect("write media file");
 
         let (target, note) =
-            compute_rename_target(&media_path, None).expect("rename target computed");
+            compute_rename_target(&media_path, None, false).expect("rename target computed");
         assert_eq!(
             target
                 .parent()
@@ -4646,6 +4669,77 @@ mod tests {
     }
 
     #[test]
+    fn rename_target_moves_noisy_parent_folder_to_canonical_name() {
+        let root = unique_temp_dir("rename-target-folder-canonical");
+        fs::create_dir_all(&root).expect("create root");
+        let noisy_dir = root.join("My.Movie.2024.1080p");
+        fs::create_dir_all(&noisy_dir).expect("create noisy dir");
+        let media_path = noisy_dir.join("My.Movie.2024.1080p.mkv");
+        fs::write(&media_path, b"x").expect("write media file");
+
+        let (target, _note) =
+            compute_rename_target(&media_path, None, true).expect("rename target computed");
+
+        let target_parent_name = target
+            .parent()
+            .and_then(|v| v.file_name())
+            .and_then(|v| v.to_str())
+            .expect("target parent name")
+            .to_string();
+        let target_file_stem = target
+            .file_stem()
+            .and_then(|v| v.to_str())
+            .expect("target file stem")
+            .to_string();
+
+        assert_ne!(target_parent_name, "My.Movie.2024.1080p");
+        assert_eq!(
+            target_parent_name,
+            target_file_stem,
+            "folder should be renamed to the same canonical stem as the media file"
+        );
+        assert_eq!(target.extension().and_then(|v| v.to_str()), Some("mkv"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_does_not_move_multi_file_parent_without_flag() {
+        let root = unique_temp_dir("rename-target-multi-file-no-flag");
+        fs::create_dir_all(&root).expect("create root");
+        let noisy_dir = root.join("My.Movie.2024.Collection");
+        fs::create_dir_all(&noisy_dir).expect("create noisy dir");
+        let media_one = noisy_dir.join("My.Movie.2024.Part1.mkv");
+        let media_two = noisy_dir.join("My.Movie.2024.Part2.mp4");
+        fs::write(&media_one, b"x").expect("write media one");
+        fs::write(&media_two, b"x").expect("write media two");
+
+        let (target, _note) =
+            compute_rename_target(&media_one, None, false).expect("rename target computed");
+
+        assert_eq!(target.parent(), Some(noisy_dir.as_path()));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_moves_multi_file_parent_with_flag() {
+        let root = unique_temp_dir("rename-target-multi-file-with-flag");
+        fs::create_dir_all(&root).expect("create root");
+        let noisy_dir = root.join("My.Movie.2024.Collection");
+        fs::create_dir_all(&noisy_dir).expect("create noisy dir");
+        let media_one = noisy_dir.join("My.Movie.2024.Part1.mkv");
+        let media_two = noisy_dir.join("My.Movie.2024.Part2.mp4");
+        fs::write(&media_one, b"x").expect("write media one");
+        fs::write(&media_two, b"x").expect("write media two");
+
+        let (target, _note) =
+            compute_rename_target(&media_one, None, true).expect("rename target computed");
+
+        assert_ne!(target.parent(), Some(noisy_dir.as_path()));
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
     fn rename_target_prefers_nfo_title_and_year() {
         let root = unique_temp_dir("rename-target-nfo");
         fs::create_dir_all(&root).expect("create root");
@@ -4658,7 +4752,7 @@ mod tests {
         .expect("write nfo");
 
         let (target, _note) =
-            compute_rename_target(&media_path, None).expect("rename target computed");
+            compute_rename_target(&media_path, None, false).expect("rename target computed");
         assert_eq!(
             target.file_name().and_then(|v| v.to_str()),
             Some("Actual Movie Name (2022).mkv")
@@ -4763,8 +4857,8 @@ mod tests {
             confidence: None,
         };
 
-        let (target, _note) =
-            compute_rename_target(&media_path, Some(&override_data)).expect("rename target");
+        let (target, _note) = compute_rename_target(&media_path, Some(&override_data), false)
+            .expect("rename target");
         assert_eq!(
             target.file_name().and_then(|v| v.to_str()),
             Some("Movie - Title (2024).mkv")
@@ -4787,8 +4881,8 @@ mod tests {
             confidence: None,
         };
 
-        let (target, _note) =
-            compute_rename_target(&media_path, Some(&override_data)).expect("rename target");
+        let (target, _note) = compute_rename_target(&media_path, Some(&override_data), false)
+            .expect("rename target");
         assert_eq!(
             target.file_name().and_then(|v| v.to_str()),
             Some("Movie Name - Part-2 (2024).mkv")
@@ -4816,8 +4910,8 @@ mod tests {
             confidence: None,
         };
 
-        let (target, note) =
-            compute_rename_target(&media_path, Some(&override_data)).expect("rename target");
+        let (target, note) = compute_rename_target(&media_path, Some(&override_data), false)
+            .expect("rename target");
         let file_name = target
             .file_name()
             .and_then(|v| v.to_str())
@@ -4874,14 +4968,14 @@ mod tests {
             confidence: None,
         };
 
-        let (first_target, _) =
-            compute_rename_target(&media_path, Some(&override_data)).expect("first rename target");
+        let (first_target, _) = compute_rename_target(&media_path, Some(&override_data), false)
+            .expect("first rename target");
         if let Some(parent) = first_target.parent() {
             fs::create_dir_all(parent).expect("create first target parent");
         }
         fs::write(&first_target, b"occupied").expect("occupy first target");
 
-        let err = compute_rename_target(&media_path, Some(&override_data))
+        let err = compute_rename_target(&media_path, Some(&override_data), false)
             .expect_err("truncated collision should return explicit conflict");
         assert!(err.contains("rename collision after truncation"));
 
@@ -4907,6 +5001,7 @@ mod tests {
                 provider_id: None,
                 confidence: None,
             }),
+            rename_parent_folder: None,
         };
         let apply_item = BulkItemInput {
             media_path: media_path.display().to_string(),
@@ -4917,6 +5012,7 @@ mod tests {
                 provider_id: None,
                 confidence: None,
             }),
+            rename_parent_folder: None,
         };
 
         let dry_run_request = BulkDryRunRequest {
@@ -4960,6 +5056,7 @@ mod tests {
                 provider_id: None,
                 confidence: None,
             }),
+            rename_parent_folder: None,
         };
         let apply_item = BulkItemInput {
             media_path: media_path.display().to_string(),
@@ -4970,6 +5067,7 @@ mod tests {
                 provider_id: None,
                 confidence: None,
             }),
+            rename_parent_folder: None,
         };
 
         let dry_run_request = BulkDryRunRequest {
@@ -5026,6 +5124,7 @@ mod tests {
                 provider_id: None,
                 confidence: None,
             }),
+            rename_parent_folder: None,
         };
         let apply_item = BulkItemInput {
             media_path: source_media.display().to_string(),
@@ -5036,6 +5135,7 @@ mod tests {
                 provider_id: None,
                 confidence: None,
             }),
+            rename_parent_folder: None,
         };
 
         let dry_run_request = BulkDryRunRequest {
@@ -5073,16 +5173,19 @@ mod tests {
                 media_path: "/tmp/Movie.Name.2024.mkv".to_string(),
                 item_uid: None,
                 metadata_override: None,
+                rename_parent_folder: None,
             },
             BulkItemInput {
                 media_path: "/tmp/movie name 2024.mp4".to_string(),
                 item_uid: None,
                 metadata_override: None,
+                rename_parent_folder: None,
             },
             BulkItemInput {
                 media_path: "/tmp/Other.Movie.mkv".to_string(),
                 item_uid: None,
                 metadata_override: None,
+                rename_parent_folder: None,
             },
         ];
 

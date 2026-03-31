@@ -103,6 +103,7 @@
 	let pageSize = $state(120);
 	let selectedPaths = $state<string[]>([]);
 	let bulkAction = $state<BulkAction>('metadata_lookup');
+	let renameParentFolders = $state(false);
 	let preview = $state<BulkDryRunResponse | null>(null);
 	let applyResult = $state<BulkApplyResponse | null>(null);
 	let bulkBusy = $state(false);
@@ -214,7 +215,8 @@
 			return {
 				media_path: mediaPath,
 				item_uid: fallbackUid,
-				metadata_override: metadataOverride
+				metadata_override: metadataOverride,
+				rename_parent_folder: bulkAction === 'rename' ? renameParentFolders : undefined
 			};
 		});
 	}
@@ -478,6 +480,18 @@
 				<button type="button" disabled={bulkBusy} onclick={runBulkPreview}>Preview Selected</button>
 				<button type="button" disabled={bulkBusy || !preview || !preview.plan_ready || (preview.action === 'metadata_lookup' && metadataPreviewStale)} onclick={applyBulkPreview}>Apply Preview</button>
 				<a class="queue-link" href="/queue">Queue</a>
+				{#if bulkAction === 'rename'}
+					<label class="toggle mono">
+						<input
+							type="checkbox"
+							bind:checked={renameParentFolders}
+							onchange={() => {
+								preview = null;
+							}}
+						/>
+						Rename parent folders (grouped/multi-file folders only)
+					</label>
+				{/if}
 			</div>
 		</SurfaceCard>
 	</section>
@@ -780,6 +794,14 @@
 		border-radius: 999px;
 		border: 1px solid var(--ring);
 		font-size: var(--font-small);
+	}
+
+	.toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		font-size: var(--font-small);
+		color: var(--muted);
 	}
 
 	.summary-line {

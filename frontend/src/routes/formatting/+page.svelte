@@ -56,6 +56,7 @@
 	let applyResult = $state<BulkApplyResponse | null>(null);
 	let rollbackResult = $state<BulkRollbackResponse | null>(null);
 	let rollbackOperationIds = $state<string[]>([]);
+	let renameParentFolders = $state(false);
 
 	onMount(async () => {
 		await refresh();
@@ -108,7 +109,8 @@
 			const file = mediaPath.split('/').pop() ?? mediaPath;
 			return {
 				media_path: mediaPath,
-				item_uid: file.replace(/\.[^.]+$/, '')
+				item_uid: file.replace(/\.[^.]+$/, ''),
+				rename_parent_folder: renameParentFolders
 			};
 		});
 	}
@@ -253,6 +255,16 @@
 			<button type="button" onclick={applyPreview} disabled={busy || !preview || !preview.plan_ready}>Apply Rename</button>
 			<button type="button" onclick={rollbackLastApply} disabled={busy || rollbackOperationIds.length === 0}>Rollback Last Apply</button>
 			<a class="library-link" href="/library">Open Library Rename/NFO Actions</a>
+			<label class="toggle mono">
+				<input
+					type="checkbox"
+					bind:checked={renameParentFolders}
+					onchange={() => {
+						preview = null;
+					}}
+				/>
+				Rename parent folders (grouped/multi-file folders only)
+			</label>
 			</div>
 			<OperationResultBanner notice={notice} error={error} nextHref="/queue" nextLabel="Next: Verify In Queue" />
 
@@ -351,6 +363,14 @@
 	button:disabled {
 		opacity: 0.62;
 		cursor: not-allowed;
+	}
+
+	.toggle {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		font-size: var(--font-small);
+		color: var(--muted);
 	}
 
 	.summary-line {

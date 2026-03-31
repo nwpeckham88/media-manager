@@ -272,6 +272,7 @@
 		const itemsPayload = group.items.map((item) => ({
 			media_path: item.media_path,
 			item_uid: uid,
+			rename_parent_folder: true,
 			metadata_override: {
 				title: group.parsed_title,
 				year: group.parsed_year ?? undefined
@@ -437,6 +438,7 @@
 		const itemsPayload = group.items.map((item) => ({
 			media_path: item.media_path,
 			item_uid: uid,
+			rename_parent_folder: true,
 			metadata_override: {
 				title: preferredTitle,
 				year: group.parsed_year ?? undefined
