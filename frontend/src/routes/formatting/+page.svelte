@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import OperationResultBanner from '$lib/components/OperationResultBanner.svelte';
+	import PageHero from '$lib/components/ui/PageHero.svelte';
+	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import { markStageComplete, markStageIncomplete } from '$lib/workflow/progress';
 
 	type FormattingCandidateItem = {
@@ -230,15 +232,20 @@
 </svelte:head>
 
 <main class="stage-shell">
-	<section class="hero">
-		<p class="eyebrow">Stage 3</p>
-		<h1>Formatting</h1>
-		<p class="lead">Review deterministic rename candidates generated from the indexed library snapshot before applying formatting operations.</p>
-		<p class="mono policy">Default rename policy: <strong>Movie Name - Subtitle (Year)</strong>. Spaces are preserved; only invalid filename characters are replaced with <code>-</code>. Matching sidecar `.nfo` files remain aligned automatically.</p>
-	</section>
+	<PageHero
+		eyebrow="Stage 3"
+		title="Formatting"
+		lead="Review deterministic rename candidates generated from the indexed library snapshot before applying formatting operations."
+	>
+		<p class="mono policy">
+			Default rename policy: <strong>Movie Name - Subtitle (Year)</strong>. Spaces are preserved; only invalid filename
+			characters are replaced with <code>-</code>. Matching sidecar <code>.nfo</code> files remain aligned automatically.
+		</p>
+	</PageHero>
 
-	<section class="card">
-		<div class="actions">
+	<section class="stage-card">
+		<SurfaceCard as="div">
+			<div class="actions">
 			<button type="button" onclick={refresh} disabled={loading}>Refresh</button>
 			<button type="button" onclick={selectAll} disabled={loading || items.length === 0}>Select All</button>
 			<button type="button" onclick={clearSelection} disabled={loading || selectedPaths.length === 0}>Clear</button>
@@ -246,100 +253,87 @@
 			<button type="button" onclick={applyPreview} disabled={busy || !preview || !preview.plan_ready}>Apply Rename</button>
 			<button type="button" onclick={rollbackLastApply} disabled={busy || rollbackOperationIds.length === 0}>Rollback Last Apply</button>
 			<a class="library-link" href="/library">Open Library Rename/NFO Actions</a>
-		</div>
-		<OperationResultBanner notice={notice} error={error} nextHref="/queue" nextLabel="Next: Verify In Queue" />
-
-		<p class="mono">selected={selectedPaths.length}</p>
-		{#if preview}
-			<p class="mono">preview batch={preview.batch_hash} total={preview.total_items} invalid={preview.summary.invalid}</p>
-		{/if}
-		{#if applyResult}
-			<p class="mono">applied total={applyResult.total_items} ok={applyResult.succeeded} fail={applyResult.failed}</p>
-		{/if}
-		{#if rollbackResult}
-			<p class="mono">rollback total={rollbackResult.total_items} ok={rollbackResult.succeeded} fail={rollbackResult.failed}</p>
-		{/if}
-
-		{#if loading}
-			<p class="mono">Loading formatting candidates...</p>
-		{:else if items.length === 0}
-			<p class="mono">No rename candidates found in current indexed window.</p>
-		{:else}
-			<div class="table-wrap">
-				<table class="mono">
-					<thead>
-						<tr>
-							<th>Select</th>
-							<th>Current Path</th>
-							<th>Proposed Path</th>
-							<th>Note</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each items as item}
-							<tr>
-								<td><input type="checkbox" checked={isSelected(item.media_path)} onchange={() => toggleSelection(item.media_path)} /></td>
-								<td>{item.media_path}</td>
-								<td>{item.proposed_media_path}</td>
-								<td>{item.note}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
 			</div>
-		{/if}
+			<OperationResultBanner notice={notice} error={error} nextHref="/queue" nextLabel="Next: Verify In Queue" />
+
+			<p class="mono summary-line">selected={selectedPaths.length}</p>
+			{#if preview}
+				<p class="mono summary-line">preview batch={preview.batch_hash} total={preview.total_items} invalid={preview.summary.invalid}</p>
+			{/if}
+			{#if applyResult}
+				<p class="mono summary-line">applied total={applyResult.total_items} ok={applyResult.succeeded} fail={applyResult.failed}</p>
+			{/if}
+			{#if rollbackResult}
+				<p class="mono summary-line">rollback total={rollbackResult.total_items} ok={rollbackResult.succeeded} fail={rollbackResult.failed}</p>
+			{/if}
+
+			{#if loading}
+				<p class="mono summary-line">Loading formatting candidates...</p>
+			{:else if items.length === 0}
+				<p class="mono summary-line">No rename candidates found in current indexed window.</p>
+			{:else}
+				<div class="table-wrap">
+					<table class="mono">
+						<thead>
+							<tr>
+								<th>Select</th>
+								<th>Current Path</th>
+								<th>Proposed Path</th>
+								<th>Note</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each items as item}
+								<tr>
+									<td><input type="checkbox" checked={isSelected(item.media_path)} onchange={() => toggleSelection(item.media_path)} /></td>
+									<td>{item.media_path}</td>
+									<td>{item.proposed_media_path}</td>
+									<td>{item.note}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		</SurfaceCard>
 	</section>
 </main>
 
 <style>
 	.stage-shell {
-		width: min(1100px, 92vw);
-		margin: 0 auto 3rem;
+		width: min(var(--content-max), 94vw);
+		margin: var(--space-4) auto calc(var(--space-6) * 2);
 		display: grid;
-		gap: 1rem;
-	}
-
-	.hero {
-		padding: 0.4rem 0;
-	}
-
-	.eyebrow {
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-		font-size: 0.78rem;
-		color: var(--muted);
-		font-weight: 700;
-	}
-
-	.lead {
-		max-width: 72ch;
-		color: var(--muted);
+		gap: var(--space-4);
 	}
 
 	.policy {
-		margin: 0.5rem 0 0;
-		font-size: 0.82rem;
+		margin: 0;
+		font-size: var(--font-small);
 		color: var(--muted);
+		line-height: 1.4;
 	}
 
-	.card {
-		background: color-mix(in srgb, var(--card) 92%, transparent);
-		border: 1px solid var(--ring);
-		border-radius: 14px;
-		padding: 1rem;
+	.policy code {
+		font-size: var(--font-tiny);
+	}
+
+	.stage-card {
+		display: grid;
+		gap: var(--space-3);
 		backdrop-filter: blur(2px);
 	}
 
 	.actions {
 		display: flex;
-		gap: 0.7rem;
+		gap: var(--space-2);
 		align-items: center;
 		flex-wrap: wrap;
 	}
 
 	button,
 	.library-link {
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		padding: 0.45rem 0.6rem;
 		font: inherit;
@@ -347,35 +341,71 @@
 		color: var(--text);
 		font-weight: 700;
 		text-decoration: none;
+		font-size: var(--font-small);
 	}
 
 	button {
 		cursor: pointer;
 	}
 
+	button:disabled {
+		opacity: 0.62;
+		cursor: not-allowed;
+	}
+
+	.summary-line {
+		margin: 0;
+		font-size: var(--font-small);
+		color: var(--muted);
+	}
+
 	.table-wrap {
 		overflow-x: auto;
-		margin-top: 0.8rem;
+		margin-top: var(--space-2);
+		border: 1px solid var(--ring);
+		border-radius: var(--radius-md);
+		background: color-mix(in srgb, var(--card) 95%, transparent);
 	}
 
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.9rem;
+		font-size: var(--font-body);
 	}
 
 	th,
 	td {
-		padding: 0.5rem;
+		padding: var(--space-2) var(--space-3);
 		border-bottom: 1px solid var(--ring);
 		text-align: left;
+		vertical-align: top;
 	}
 
 	th {
-		font-size: 0.75rem;
+		font-size: var(--font-label);
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		color: var(--muted);
+	}
+
+	tbody tr:last-child td {
+		border-bottom: none;
+	}
+
+	@media (max-width: 760px) {
+		.actions {
+			gap: var(--space-2);
+		}
+
+		button,
+		.library-link {
+			width: 100%;
+			text-align: center;
+		}
+
+		table {
+			font-size: var(--font-small);
+		}
 	}
 
 </style>

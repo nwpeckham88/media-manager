@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import OperationResultBanner from '$lib/components/OperationResultBanner.svelte';
+	import PageHero from '$lib/components/ui/PageHero.svelte';
+	import SectionHeader from '$lib/components/ui/SectionHeader.svelte';
+	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import { markStageComplete, markStageIncomplete } from '$lib/workflow/progress';
 
 	type IndexedMediaItem = {
@@ -274,13 +277,15 @@
 </svelte:head>
 
 <main class="stage-shell">
-	<section class="hero">
-		<p class="eyebrow">Stage 2</p>
-		<h1>Metadata</h1>
-		<p class="lead">Review parser output and focus on items missing provider IDs or with lower-confidence metadata inference.</p>
-	</section>
+	<PageHero
+		eyebrow="Stage 2"
+		title="Metadata"
+		lead="Review parser output and focus on items missing provider IDs or with lower-confidence metadata inference."
+	/>
 
-	<section class="card">
+	<section class="stage-card">
+		<SurfaceCard as="div">
+			<SectionHeader title="Candidate Review" href="/library" label="Open Library Bulk Editor" />
 		<div class="actions">
 			<input bind:value={query} placeholder="search title/path/provider" />
 			<label class="toggle mono"><input type="checkbox" bind:checked={onlyMissingProvider} /> Only Missing Provider</label>
@@ -291,25 +296,24 @@
 			<button type="button" onclick={runPreview} disabled={busy || selectedPaths.length === 0}>Preview Apply</button>
 			<button type="button" onclick={applyPreview} disabled={busy || !preview || !preview.plan_ready}>Apply Preview</button>
 			<button type="button" onclick={rollbackLastApply} disabled={busy || rollbackOperationIds.length === 0}>Rollback Last Apply</button>
-			<a class="library-link" href="/library">Open Library Bulk Editor</a>
 		</div>
 		<OperationResultBanner notice={notice} error={error} nextHref="/formatting" nextLabel="Next: Formatting" />
 
-		<p class="mono">selected={selectedPaths.length}</p>
+		<p class="mono summary-line">selected={selectedPaths.length}</p>
 		{#if preview}
-			<p class="mono">preview batch={preview.batch_hash} total={preview.total_items} creates={preview.summary.creates} updates={preview.summary.updates} invalid={preview.summary.invalid}</p>
+			<p class="mono summary-line">preview batch={preview.batch_hash} total={preview.total_items} creates={preview.summary.creates} updates={preview.summary.updates} invalid={preview.summary.invalid}</p>
 		{/if}
 		{#if applyResult}
-			<p class="mono">applied total={applyResult.total_items} ok={applyResult.succeeded} fail={applyResult.failed}</p>
+			<p class="mono summary-line">applied total={applyResult.total_items} ok={applyResult.succeeded} fail={applyResult.failed}</p>
 		{/if}
 		{#if rollbackResult}
-			<p class="mono">rollback total={rollbackResult.total_items} ok={rollbackResult.succeeded} fail={rollbackResult.failed}</p>
+			<p class="mono summary-line">rollback total={rollbackResult.total_items} ok={rollbackResult.succeeded} fail={rollbackResult.failed}</p>
 		{/if}
 
 		{#if loading}
-			<p class="mono">Loading metadata candidates...</p>
+			<p class="mono summary-line">Loading metadata candidates...</p>
 		{:else if items.length === 0}
-			<p class="mono">No candidates matched current filters.</p>
+			<p class="mono summary-line">No candidates matched current filters.</p>
 		{:else}
 			<div class="table-wrap">
 				<table class="mono">
@@ -338,58 +342,40 @@
 				</table>
 			</div>
 		{/if}
+		</SurfaceCard>
 	</section>
 </main>
 
 <style>
 	.stage-shell {
-		width: min(1100px, 92vw);
-		margin: 0 auto 3rem;
+		width: min(var(--content-max), 94vw);
+		margin: var(--space-4) auto calc(var(--space-6) * 2);
 		display: grid;
-		gap: 1rem;
+		gap: var(--space-4);
 	}
 
-	.hero {
-		padding: 0.4rem 0;
-	}
-
-	.eyebrow {
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-		font-size: 0.78rem;
-		color: var(--muted);
-		font-weight: 700;
-	}
-
-	.lead {
-		max-width: 72ch;
-		color: var(--muted);
-	}
-
-	.card {
-		background: color-mix(in srgb, var(--card) 92%, transparent);
-		border: 1px solid var(--ring);
-		border-radius: 14px;
-		padding: 1rem;
+	.stage-card {
+		display: grid;
+		gap: var(--space-3);
 		backdrop-filter: blur(2px);
 	}
 
 	.actions {
 		display: flex;
-		gap: 0.7rem;
+		gap: var(--space-2);
 		align-items: center;
 		flex-wrap: wrap;
 	}
 
 	input,
-	button,
-	.library-link {
-		border-radius: 10px;
+	button {
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		padding: 0.45rem 0.6rem;
 		font: inherit;
 		background: color-mix(in srgb, var(--card) 95%, transparent);
 		color: var(--text);
+		font-size: var(--font-small);
 	}
 
 	button {
@@ -397,31 +383,45 @@
 		cursor: pointer;
 	}
 
-	.library-link {
-		text-decoration: none;
-		font-weight: 700;
+	button:disabled {
+		opacity: 0.62;
+		cursor: not-allowed;
+	}
+
+	.summary-line {
+		margin: 0;
+		font-size: var(--font-small);
+		color: var(--muted);
+	}
+
+	input {
+		min-width: 15rem;
 	}
 
 	.table-wrap {
 		overflow-x: auto;
-		margin-top: 0.8rem;
+		margin-top: var(--space-2);
+		border: 1px solid var(--ring);
+		border-radius: var(--radius-md);
+		background: color-mix(in srgb, var(--card) 96%, transparent);
 	}
 
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.9rem;
+		font-size: var(--font-body);
 	}
 
 	th,
 	td {
-		padding: 0.5rem;
+		padding: var(--space-2) var(--space-3);
 		border-bottom: 1px solid var(--ring);
 		text-align: left;
+		vertical-align: top;
 	}
 
 	th {
-		font-size: 0.75rem;
+		font-size: var(--font-label);
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		color: var(--muted);
@@ -430,11 +430,24 @@
 	.toggle {
 		display: inline-flex;
 		align-items: center;
-		gap: 0.4rem;
+		gap: var(--space-2);
+		font-size: var(--font-small);
 	}
 
 	.conf {
-		width: 5.6rem;
+		width: 6rem;
+		min-width: 0;
+	}
+
+	@media (max-width: 760px) {
+		input,
+		button {
+			width: 100%;
+		}
+
+		.conf {
+			width: 100%;
+		}
 	}
 
 </style>

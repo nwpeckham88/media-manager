@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import PageHero from '$lib/components/ui/PageHero.svelte';
+	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
+	import SectionHeader from '$lib/components/ui/SectionHeader.svelte';
 
 	type AppConfig = {
 		library_roots: string[];
@@ -409,15 +412,18 @@
 </svelte:head>
 
 <main class="library-shell">
-	<section class="library-hero">
-		<p class="eyebrow">Browse-first management</p>
-		<h1>Library</h1>
-		<p class="lead">Advanced utility for manual inspection and targeted fixes. For normal run order use Consolidation -> Metadata -> Formatting first, then return here for exceptions.</p>
+	<PageHero
+		eyebrow="Browse-first management"
+		title="Library"
+		lead="Advanced utility for manual inspection and targeted fixes. For normal run order use Consolidation -> Metadata -> Formatting first, then return here for exceptions."
+	>
 		<p class="mono helper-links"><a href="/">Open Workflow Dashboard</a> | <a href="/operations">Open Operations</a></p>
-	</section>
+	</PageHero>
 
-	<section class="controls card">
-		<div class="control-row">
+	<section class="stage-card controls">
+		<SurfaceCard as="div">
+			<SectionHeader title="Browse and Bulk Actions" />
+			<div class="control-row">
 			<label>
 				<span>Configured Library</span>
 				<select
@@ -447,40 +453,42 @@
 			</label>
 			<button type="button" onclick={applyFilter}>Apply Filter</button>
 			<button type="button" onclick={loadItems}>Refresh</button>
-		</div>
+			</div>
 
-		<div class="control-row stat-row mono">
-			<span>Total matches: {totalMatches}</span>
-			<span>Showing: {items.length}</span>
-			<span>Offset: {offset}</span>
-			<span>Page size: {pageSize}</span>
-		</div>
+			<div class="control-row stat-row mono">
+				<span>Total matches: {totalMatches}</span>
+				<span>Showing: {items.length}</span>
+				<span>Offset: {offset}</span>
+				<span>Page size: {pageSize}</span>
+			</div>
 
-		<div class="control-row">
-			<button type="button" onclick={selectAllPage}>Select Page</button>
-			<button type="button" onclick={clearSelection}>Clear Selection</button>
-			<span class="selection-pill mono">Selected: {selectedPaths.length}</span>
-			<label class="bulk-action-label">
-				<span>Bulk Action</span>
-				<select bind:value={bulkAction}>
-					<option value="metadata_lookup">Metadata Lookup</option>
-					<option value="combine_duplicates">Combine Duplicates</option>
-					<option value="rename">Rename</option>
-					<option value="validate_nfo">Validate NFO</option>
-				</select>
-			</label>
-			<button type="button" disabled={bulkBusy} onclick={runBulkPreview}>Preview Selected</button>
-			<button type="button" disabled={bulkBusy || !preview || !preview.plan_ready || (preview.action === 'metadata_lookup' && metadataPreviewStale)} onclick={applyBulkPreview}>Apply Preview</button>
-			<a class="queue-link" href="/queue">Queue</a>
-		</div>
+			<div class="control-row">
+				<button type="button" onclick={selectAllPage}>Select Page</button>
+				<button type="button" onclick={clearSelection}>Clear Selection</button>
+				<span class="selection-pill mono">Selected: {selectedPaths.length}</span>
+				<label class="bulk-action-label">
+					<span>Bulk Action</span>
+					<select bind:value={bulkAction}>
+						<option value="metadata_lookup">Metadata Lookup</option>
+						<option value="combine_duplicates">Combine Duplicates</option>
+						<option value="rename">Rename</option>
+						<option value="validate_nfo">Validate NFO</option>
+					</select>
+				</label>
+				<button type="button" disabled={bulkBusy} onclick={runBulkPreview}>Preview Selected</button>
+				<button type="button" disabled={bulkBusy || !preview || !preview.plan_ready || (preview.action === 'metadata_lookup' && metadataPreviewStale)} onclick={applyBulkPreview}>Apply Preview</button>
+				<a class="queue-link" href="/queue">Queue</a>
+			</div>
+		</SurfaceCard>
 	</section>
 
 	{#if preview}
-		<section class="card">
-			<h2>Bulk Preview</h2>
-			<p class="mono">
+		<section class="stage-card">
+			<SurfaceCard as="div">
+				<SectionHeader title="Bulk Preview" />
+				<p class="mono summary-line">
 				action={preview.action} batch={preview.batch_hash} creates={preview.summary.creates} updates={preview.summary.updates} noops={preview.summary.noops} invalid={preview.summary.invalid}
-			</p>
+				</p>
 			{#if preview.action === 'rename'}
 				<ul class="rows mono">
 					{#each preview.items as item}
@@ -575,15 +583,17 @@
 					{/each}
 				</ul>
 			{/if}
+				</SurfaceCard>
 		</section>
 	{/if}
 
 	{#if applyResult}
-		<section class="card">
-			<h2>Bulk Apply Result</h2>
-			<p class="mono">
+			<section class="stage-card">
+				<SurfaceCard as="div">
+					<SectionHeader title="Bulk Apply Result" />
+					<p class="mono summary-line">
 				total={applyResult.total_items} succeeded={applyResult.succeeded} failed={applyResult.failed}
-			</p>
+					</p>
 			{#if applyResult.action === 'rename'}
 				<ul class="rows mono">
 					{#each applyResult.items as item}
@@ -634,16 +644,19 @@
 					{/each}
 				</ul>
 			{/if}
+				</SurfaceCard>
 		</section>
 	{/if}
 
-	<section class="card table-card">
+		<section class="stage-card table-card">
+			<SurfaceCard as="div">
+				<SectionHeader title="Library Items" />
 		{#if loading}
-			<p class="mono">Loading library items...</p>
+				<p class="mono summary-line">Loading library items...</p>
 		{:else if error}
 			<p class="error">{error}</p>
 		{:else if items.length === 0}
-			<p class="mono">No media items found for the current filters.</p>
+				<p class="mono summary-line">No media items found for the current filters.</p>
 		{:else}
 			<div class="table-wrap">
 				<table>
@@ -685,6 +698,7 @@
 			<button type="button" onclick={previousPage} disabled={loading || offset === 0}>Previous</button>
 			<button type="button" onclick={nextPage} disabled={loading || offset + pageSize >= totalMatches}>Next</button>
 		</div>
+		</SurfaceCard>
 	</section>
 
 	<ConfirmDialog
@@ -701,51 +715,32 @@
 
 <style>
 	.library-shell {
-		width: min(1280px, 92vw);
-		margin: 0 auto 3rem;
+		width: min(var(--content-max), 94vw);
+		margin: var(--space-4) auto calc(var(--space-6) * 2);
 		display: grid;
-		gap: 1rem;
+		gap: var(--space-4);
 	}
 
-	.library-hero {
-		padding: 0.4rem 0;
-	}
-
-	.eyebrow {
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-		font-size: 0.78rem;
-		color: var(--muted);
-		font-weight: 700;
-	}
-
-	.lead {
-		max-width: 70ch;
-		color: var(--muted);
-	}
-
-	.card {
-		background: color-mix(in srgb, var(--card) 92%, transparent);
-		border: 1px solid var(--ring);
-		border-radius: 14px;
-		padding: 1rem;
+	.stage-card {
+		display: grid;
+		gap: var(--space-3);
 		backdrop-filter: blur(2px);
 	}
 
 	.control-row {
 		display: flex;
-		gap: 0.7rem;
+		gap: var(--space-2);
 		align-items: end;
 		flex-wrap: wrap;
 	}
 
 	.control-row + .control-row {
-		margin-top: 0.8rem;
+		margin-top: var(--space-3);
 	}
 
 	label {
 		display: grid;
-		gap: 0.3rem;
+		gap: var(--space-1);
 		min-width: 240px;
 	}
 
@@ -754,17 +749,18 @@
 	}
 
 	label span {
-		font-size: 0.85rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 
 	input,
 	select,
 	button {
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		padding: 0.5rem 0.65rem;
 		font: inherit;
+		font-size: var(--font-small);
 		background: color-mix(in srgb, var(--card) 95%, transparent);
 		color: var(--text);
 	}
@@ -775,7 +771,7 @@
 	}
 
 	button:disabled {
-		opacity: 0.55;
+		opacity: 0.62;
 		cursor: not-allowed;
 	}
 
@@ -783,16 +779,26 @@
 		padding: 0.5rem 0.7rem;
 		border-radius: 999px;
 		border: 1px solid var(--ring);
+		font-size: var(--font-small);
+	}
+
+	.summary-line {
+		margin: 0;
+		font-size: var(--font-small);
+		color: var(--muted);
 	}
 
 	.table-wrap {
 		overflow-x: auto;
+		border: 1px solid var(--ring);
+		border-radius: var(--radius-md);
+		background: color-mix(in srgb, var(--card) 96%, transparent);
 	}
 
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.92rem;
+		font-size: var(--font-body);
 	}
 
 	.metadata-table input {
@@ -810,18 +816,19 @@
 
 	th,
 	td {
-		padding: 0.55rem;
+		padding: var(--space-2) var(--space-3);
 		border-bottom: 1px solid var(--ring);
 		text-align: left;
+		vertical-align: top;
 	}
 
 	.helper-links {
-		margin: 0.55rem 0 0;
-		font-size: 0.82rem;
+		margin: 0;
+		font-size: var(--font-small);
 	}
 
 	th {
-		font-size: 0.76rem;
+		font-size: var(--font-label);
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		color: var(--muted);
@@ -832,7 +839,7 @@
 		padding: 0.2rem 0.5rem;
 		border-radius: 999px;
 		background: color-mix(in srgb, var(--danger) 12%, transparent);
-		font-size: 0.8rem;
+		font-size: var(--font-small);
 		font-weight: 700;
 	}
 
@@ -842,9 +849,9 @@
 
 	.pager {
 		display: flex;
-		gap: 0.6rem;
+		gap: var(--space-3);
 		justify-content: flex-end;
-		margin-top: 0.9rem;
+		margin-top: var(--space-4);
 	}
 
 	.error {
@@ -857,25 +864,26 @@
 		padding: 0;
 		margin: 0;
 		display: grid;
-		gap: 0.45rem;
+		gap: var(--space-2);
 	}
 
 	.rows li {
 		display: flex;
 		justify-content: space-between;
-		gap: 0.7rem;
+		gap: var(--space-3);
 		border-bottom: 1px dashed var(--ring);
-		padding-bottom: 0.3rem;
+		padding-bottom: var(--space-2);
 	}
 
 	.queue-link {
 		display: inline-flex;
 		align-items: center;
 		padding: 0.5rem 0.75rem;
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		text-decoration: none;
 		font-weight: 700;
+		font-size: var(--font-small);
 	}
 
 	.item-link {
@@ -886,11 +894,21 @@
 
 	@media (max-width: 900px) {
 		.library-shell {
-			width: min(100%, 96vw);
+			width: 96vw;
 		}
 
 		label {
 			min-width: 180px;
+		}
+
+		button,
+		.queue-link {
+			width: 100%;
+			justify-content: center;
+		}
+
+		.rows li {
+			flex-direction: column;
 		}
 	}
 </style>

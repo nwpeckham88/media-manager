@@ -2,6 +2,9 @@
 	import { onMount } from 'svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import OperationResultBanner from '$lib/components/OperationResultBanner.svelte';
+	import PageHero from '$lib/components/ui/PageHero.svelte';
+	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
+	import SectionHeader from '$lib/components/ui/SectionHeader.svelte';
 	import {
 		markStageComplete,
 		markStageIncomplete,
@@ -213,27 +216,30 @@
 </svelte:head>
 
 <main class="ops-shell">
-	<section class="hero">
-		<p class="eyebrow">Operations</p>
-		<h1>Apply and Rollback History</h1>
-		<p class="lead">Centralized timeline for stage operations. Use this view when you need to audit or recover changes.</p>
-	</section>
+	<PageHero
+		eyebrow="Operations"
+		title="Apply and Rollback History"
+		lead="Centralized timeline for stage operations. Use this view when you need to audit or recover changes."
+	/>
 
-	<section class="card">
-		<div class="actions">
+	<section class="stage-card">
+		<SurfaceCard as="div">
+			<div class="actions">
 			<button type="button" onclick={refresh} disabled={loading}>Refresh</button>
 			<a href="/queue">Open Queue</a>
-		</div>
-		<OperationResultBanner notice={notice} error={error} nextHref="/queue" nextLabel="Next: Verify in Queue" />
+			</div>
+			<OperationResultBanner notice={notice} error={error} nextHref="/queue" nextLabel="Next: Verify in Queue" />
 		{#if lastRollback}
-			<p class="mono">rollback total={lastRollback.total_items} ok={lastRollback.succeeded} fail={lastRollback.failed}</p>
+			<p class="mono summary-line">rollback total={lastRollback.total_items} ok={lastRollback.succeeded} fail={lastRollback.failed}</p>
 		{/if}
+		</SurfaceCard>
 	</section>
 
-	<section class="card">
-		<h2>Recent Jobs With Rollback Candidates</h2>
+	<section class="stage-card">
+		<SurfaceCard as="div">
+			<SectionHeader title="Recent Jobs With Rollback Candidates" />
 		{#if jobs.length === 0}
-			<p class="mono">No jobs available.</p>
+			<p class="mono summary-line">No jobs available.</p>
 		{:else}
 			<ul class="rows mono">
 				{#each jobs as job}
@@ -250,12 +256,14 @@
 				{/each}
 			</ul>
 		{/if}
+		</SurfaceCard>
 	</section>
 
-	<section class="card">
-		<h2>Recent Operation Events</h2>
+	<section class="stage-card">
+		<SurfaceCard as="div">
+			<SectionHeader title="Recent Operation Events" />
 		{#if events.length === 0}
-			<p class="mono">No operation events yet.</p>
+			<p class="mono summary-line">No operation events yet.</p>
 		{:else}
 			<ul class="rows mono">
 				{#each events as event}
@@ -269,6 +277,7 @@
 				{/each}
 			</ul>
 		{/if}
+		</SurfaceCard>
 	</section>
 
 	<ConfirmDialog
@@ -285,57 +294,47 @@
 
 <style>
 	.ops-shell {
-		width: min(1100px, 92vw);
-		margin: 1rem auto 3rem;
+		width: min(var(--content-max), 94vw);
+		margin: var(--space-4) auto calc(var(--space-6) * 2);
 		display: grid;
-		gap: 0.9rem;
+		gap: var(--space-4);
 	}
 
-	.hero {
-		padding: 0.4rem 0;
+	.stage-card {
+		display: grid;
+		gap: var(--space-3);
 	}
 
-	.eyebrow {
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-		font-size: 0.78rem;
-		color: var(--muted);
-		font-weight: 700;
+	.summary-line {
 		margin: 0;
-	}
-
-	.lead {
-		margin: 0;
-		max-width: 72ch;
+		font-size: var(--font-small);
 		color: var(--muted);
-	}
-
-	.card {
-		background: color-mix(in srgb, var(--card) 92%, transparent);
-		border: 1px solid var(--ring);
-		border-radius: 14px;
-		padding: 0.95rem;
-		backdrop-filter: blur(2px);
 	}
 
 	.actions {
 		display: flex;
-		gap: 0.6rem;
-		margin-bottom: 0.65rem;
+		gap: var(--space-2);
+		margin-bottom: var(--space-3);
 		flex-wrap: wrap;
 	}
 
 	button,
 	a {
 		border: 1px solid var(--ring);
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		padding: 0.42rem 0.62rem;
 		font: inherit;
 		font-weight: 700;
+		font-size: var(--font-small);
 		text-decoration: none;
 		cursor: pointer;
 		background: color-mix(in srgb, var(--card) 95%, transparent);
 		color: var(--text);
+	}
+
+	button:disabled {
+		opacity: 0.62;
+		cursor: not-allowed;
 	}
 
 	.rows {
@@ -343,15 +342,15 @@
 		padding: 0;
 		margin: 0;
 		display: grid;
-		gap: 0.45rem;
+		gap: var(--space-2);
 	}
 
 	.rows li {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		gap: 0.7rem;
-		padding-bottom: 0.4rem;
+		gap: var(--space-3);
+		padding-bottom: var(--space-2);
 		border-bottom: 1px dashed var(--ring);
 	}
 
@@ -360,13 +359,13 @@
 	}
 
 	.hint {
-		font-size: 0.76rem;
+		font-size: var(--font-label);
 		color: var(--muted);
 	}
 
 	.row-actions {
 		display: flex;
-		gap: 0.45rem;
+		gap: var(--space-2);
 	}
 
 	.ok {
@@ -375,5 +374,22 @@
 
 	.fail {
 		color: var(--danger);
+	}
+
+	@media (max-width: 760px) {
+		button,
+		a {
+			width: 100%;
+			text-align: center;
+		}
+
+		.rows li {
+			flex-direction: column;
+			align-items: flex-start;
+		}
+
+		.row-actions {
+			width: 100%;
+		}
 	}
 </style>

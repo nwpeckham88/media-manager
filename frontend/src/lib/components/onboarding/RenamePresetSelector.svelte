@@ -24,11 +24,11 @@
 <style>
 	.panel {
 		display: grid;
-		gap: 0.9rem;
+		gap: var(--space-4);
 	}
 
 	header h2 {
-		margin: 0.2rem 0;
+		margin: var(--space-1) 0;
 		font-size: 1.3rem;
 	}
 
@@ -41,7 +41,7 @@
 		margin: 0;
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
-		font-size: 0.72rem;
+		font-size: var(--font-label);
 		font-weight: 700;
 		color: var(--muted);
 	}
@@ -49,17 +49,17 @@
 	.preset {
 		display: grid;
 		grid-template-columns: auto 1fr;
-		gap: 0.7rem;
+		gap: var(--space-3);
 		align-items: start;
 		border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--ring));
 		box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 26%, transparent);
-		padding: 0.75rem;
+		padding: var(--space-3);
 		border-radius: 12px;
 		background: color-mix(in srgb, var(--card) 92%, transparent);
 	}
 
 	input {
-		margin-top: 0.25rem;
+		margin-top: var(--space-1);
 	}
 
 	strong {
@@ -67,11 +67,11 @@
 	}
 
 	p {
-		margin: 0.24rem 0;
+		margin: var(--space-1) 0;
 		color: var(--muted);
 	}
 
 	.note {
-		font-size: 0.83rem;
+		font-size: var(--font-small);
 	}
 </style>

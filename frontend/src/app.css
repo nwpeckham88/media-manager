@@ -11,6 +11,20 @@
 	--card: #fefdf8;
 	--ring: rgba(15, 127, 118, 0.24);
 	--shadow: 0 16px 42px rgba(16, 24, 35, 0.1);
+	--radius-md: 10px;
+	--radius-lg: 16px;
+	--radius-xl: 20px;
+	--space-1: 0.25rem;
+	--space-2: 0.5rem;
+	--space-3: 0.75rem;
+	--space-4: 1rem;
+	--space-5: 1.25rem;
+	--space-6: 1.5rem;
+	--font-tiny: 0.77rem;
+	--font-label: 0.74rem;
+	--font-small: 0.84rem;
+	--font-body: 0.9rem;
+	--content-max: 1160px;
 }
 
 html[data-theme='dark'] {

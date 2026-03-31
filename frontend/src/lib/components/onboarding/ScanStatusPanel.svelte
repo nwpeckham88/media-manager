@@ -78,11 +78,11 @@
 <style>
 	.panel {
 		display: grid;
-		gap: 0.9rem;
+		gap: var(--space-4);
 	}
 
 	header h2 {
-		margin: 0.2rem 0;
+		margin: var(--space-1) 0;
 		font-size: 1.3rem;
 	}
 
@@ -95,7 +95,7 @@
 		margin: 0;
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
-		font-size: 0.72rem;
+		font-size: var(--font-label);
 		font-weight: 700;
 		color: var(--muted);
 	}
@@ -103,19 +103,19 @@
 	.metrics {
 		display: grid;
 		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 0.6rem;
+		gap: var(--space-3);
 	}
 
 	article {
 		border: 1px solid var(--ring);
 		border-radius: 12px;
-		padding: 0.7rem;
+		padding: var(--space-3);
 		background: color-mix(in srgb, var(--card) 92%, transparent);
 	}
 
 	.label {
 		margin: 0;
-		font-size: 0.72rem;
+		font-size: var(--font-label);
 		letter-spacing: 0.09em;
 		text-transform: uppercase;
 		color: var(--muted);
@@ -128,15 +128,15 @@
 	.status-row {
 		display: flex;
 		align-items: center;
-		gap: 0.6rem;
+		gap: var(--space-3);
 		flex-wrap: wrap;
 	}
 
 	.pill {
 		border-radius: 999px;
-		padding: 0.35rem 0.62rem;
+		padding: 0.4rem 0.62rem;
 		font-weight: 700;
-		font-size: 0.82rem;
+		font-size: var(--font-small);
 		border: 1px solid var(--ring);
 		background: color-mix(in srgb, var(--card) 94%, transparent);
 	}
@@ -147,7 +147,7 @@
 	}
 
 	.latest {
-		font-size: 0.76rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 

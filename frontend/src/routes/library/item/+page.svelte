@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import PageHero from '$lib/components/ui/PageHero.svelte';
+	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
+	import SectionHeader from '$lib/components/ui/SectionHeader.svelte';
 
 	type SidecarState = {
 		item_uid: string;
@@ -349,16 +352,15 @@
 </svelte:head>
 
 <main class="detail-shell">
-	<section class="hero">
-		<p class="eyebrow">Item inspection workflow</p>
-		<h1>Media Item</h1>
-		<p class="mono break">{mediaPath || 'No media path'}</p>
+	<PageHero eyebrow="Item inspection workflow" title="Media Item" lead={mediaPath || 'No media path'}>
 		<p><a class="back-link" href="/library">Back to Library</a></p>
-	</section>
+	</PageHero>
 
-	<section class="card">
+	<section class="stage-card">
+		<SurfaceCard as="div">
+			<SectionHeader title="Sidecar Summary" />
 		{#if loading}
-			<p class="mono">Loading item details...</p>
+			<p class="mono summary-line">Loading item details...</p>
 		{:else if sidecar}
 			<ul class="rows mono">
 				<li><span>Sidecar path</span><strong>{sidecar.sidecar_path}</strong></li>
@@ -366,11 +368,14 @@
 				<li><span>NFO state</span><strong>{sidecar.state?.nfo_state ?? 'unknown'}</strong></li>
 			</ul>
 		{:else}
-			<p class="mono">No sidecar details loaded.</p>
+			<p class="mono summary-line">No sidecar details loaded.</p>
 		{/if}
+		</SurfaceCard>
 	</section>
 
-	<section class="card">
+	<section class="stage-card">
+		<SurfaceCard as="div">
+			<SectionHeader title="Policy and Actions" />
 		<label>
 			<span>Item UID</span>
 			<input bind:value={itemUid} placeholder="item uid" />
@@ -489,17 +494,18 @@
 		</div>
 
 		{#if plan}
-			<p class="mono">Plan action={plan.action} hash={plan.plan_hash}</p>
+			<p class="mono summary-line">Plan action={plan.action} hash={plan.plan_hash}</p>
 		{/if}
 		{#if applyResult}
-			<p class="mono">Applied operation: {applyResult.operation_id}</p>
+			<p class="mono summary-line">Applied operation: {applyResult.operation_id}</p>
 		{/if}
 		{#if rollbackResult}
-			<p class="mono">Rollback restored: {rollbackResult.restored ? 'yes' : 'no'}</p>
+			<p class="mono summary-line">Rollback restored: {rollbackResult.restored ? 'yes' : 'no'}</p>
 		{/if}
 		{#if error}
 			<p class="error">{error}</p>
 		{/if}
+		</SurfaceCard>
 	</section>
 
 	<ConfirmDialog
@@ -516,30 +522,22 @@
 
 <style>
 	.detail-shell {
-		width: min(1080px, 92vw);
-		margin: 0 auto 3rem;
+		width: min(var(--content-max), 94vw);
+		margin: var(--space-4) auto calc(var(--space-6) * 2);
 		display: grid;
-		gap: 1rem;
+		gap: var(--space-4);
 	}
 
-	.hero {
-		padding: 0.4rem 0;
-	}
-
-	.eyebrow {
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-		font-size: 0.78rem;
-		color: var(--muted);
-		font-weight: 700;
-	}
-
-	.card {
-		background: color-mix(in srgb, var(--card) 92%, transparent);
-		border: 1px solid var(--ring);
-		border-radius: 14px;
-		padding: 1rem;
+	.stage-card {
+		display: grid;
+		gap: var(--space-3);
 		backdrop-filter: blur(2px);
+	}
+
+	.summary-line {
+		margin: 0;
+		font-size: var(--font-small);
+		color: var(--muted);
 	}
 
 	.rows {
@@ -547,43 +545,45 @@
 		padding: 0;
 		margin: 0;
 		display: grid;
-		gap: 0.45rem;
+		gap: var(--space-2);
 	}
 
 	.rows li {
 		display: flex;
 		justify-content: space-between;
-		gap: 0.7rem;
+		gap: var(--space-3);
 		border-bottom: 1px dashed var(--ring);
-		padding-bottom: 0.3rem;
+		padding-bottom: var(--space-2);
 	}
 
 	label {
 		display: grid;
-		gap: 0.3rem;
+		gap: var(--space-1);
 		min-width: 300px;
 	}
 
 	label span {
-		font-size: 0.85rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 
 	input,
 	select,
 	button {
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		padding: 0.5rem 0.65rem;
 		font: inherit;
+		font-size: var(--font-small);
 		background: color-mix(in srgb, var(--card) 95%, transparent);
 		color: var(--text);
 	}
 
 	.actions {
 		display: flex;
-		gap: 0.7rem;
-		margin-top: 0.7rem;
+		gap: var(--space-3);
+		margin-top: var(--space-3);
+		flex-wrap: wrap;
 	}
 
 	button {
@@ -594,20 +594,20 @@
 	.policy-grid {
 		display: grid;
 		grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-		gap: 0.7rem;
-		margin-top: 0.9rem;
+		gap: var(--space-3);
+		margin-top: var(--space-4);
 	}
 
 	.checkbox-grid {
 		display: grid;
-		gap: 0.35rem;
-		margin-top: 0.9rem;
+		gap: var(--space-2);
+		margin-top: var(--space-4);
 	}
 
 	.check {
 		display: flex;
 		align-items: center;
-		gap: 0.55rem;
+		gap: var(--space-2);
 		min-width: 100%;
 	}
 
@@ -616,26 +616,23 @@
 	}
 
 	.section-title {
-		margin: 0 0 0.2rem;
+		margin: 0 0 var(--space-1);
 		color: var(--muted);
 	}
 
 	button:disabled {
-		opacity: 0.55;
+		opacity: 0.62;
 		cursor: not-allowed;
 	}
 
 	.back-link {
 		display: inline-flex;
-		padding: 0.4rem 0.75rem;
+		padding: 0.5rem 0.75rem;
 		border: 1px solid var(--ring);
 		border-radius: 999px;
 		text-decoration: none;
 		font-weight: 700;
-	}
-
-	.break {
-		word-break: break-all;
+		font-size: var(--font-small);
 	}
 
 	.error {
@@ -645,7 +642,22 @@
 
 	@media (max-width: 900px) {
 		.detail-shell {
-			width: min(100%, 96vw);
+			width: 96vw;
+		}
+
+		label {
+			min-width: 0;
+		}
+
+		button,
+		.back-link {
+			width: 100%;
+			justify-content: center;
+		}
+
+		.rows li {
+			flex-direction: column;
+			align-items: flex-start;
 		}
 	}
 </style>

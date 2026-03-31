@@ -2,6 +2,9 @@
 	import { onMount } from 'svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import OperationResultBanner from '$lib/components/OperationResultBanner.svelte';
+	import PageHero from '$lib/components/ui/PageHero.svelte';
+	import SectionHeader from '$lib/components/ui/SectionHeader.svelte';
+	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import {
 		markStageComplete,
 		markStageIncomplete,
@@ -401,13 +404,15 @@
 </svelte:head>
 
 <main class="queue-shell">
-	<section class="queue-hero">
-		<p class="eyebrow">Bulk processing visibility</p>
-		<h1>Queue</h1>
-		<p class="lead">Recent bulk dry-run and apply jobs with status, timestamps, and error details.</p>
-	</section>
+	<PageHero
+		eyebrow="Bulk processing visibility"
+		title="Queue"
+		lead="Recent bulk dry-run and apply jobs with status, timestamps, and error details."
+	/>
 
-	<section class="card">
+	<section class="queue-card">
+		<SurfaceCard as="div">
+			<SectionHeader title="Job Feed" href="/operations" label="Review Operations" />
 		<div class="actions">
 			<button type="button" onclick={loadJobs} disabled={loading}>Refresh</button>
 			<label>
@@ -431,7 +436,7 @@
 			<button type="button" onclick={applyFilters} disabled={loading}>Apply</button>
 		</div>
 
-		<p class="mono">
+		<p class="mono summary-line">
 			total={totalCount} showing {jobs.length === 0 ? 0 : offset + 1}-{Math.min(offset + jobs.length, totalCount)} offset={offset} page_size={pageSize}
 		</p>
 
@@ -454,11 +459,11 @@
 		{/if}
 
 		{#if loading}
-			<p class="mono">Loading bulk jobs...</p>
+			<p class="mono summary-line">Loading bulk jobs...</p>
 		{:else if error}
 			<p class="error">{error}</p>
 		{:else if jobs.length === 0}
-			<p class="mono">No jobs yet. Run indexing from Consolidation or preview/apply from Library.</p>
+			<p class="mono summary-line">No jobs yet. Run indexing from Consolidation or preview/apply from Library.</p>
 		{:else}
 			<div class="table-wrap">
 				<table>
@@ -561,6 +566,7 @@
 				<button type="button" onclick={nextPage} disabled={loading || offset + pageSize >= totalCount}>Next</button>
 			</div>
 		{/if}
+		</SurfaceCard>
 	</section>
 
 	<ConfirmDialog
@@ -577,57 +583,38 @@
 
 <style>
 	.queue-shell {
-		width: min(1200px, 92vw);
-		margin: 0 auto 3rem;
+		width: min(var(--content-max), 94vw);
+		margin: var(--space-4) auto calc(var(--space-6) * 2);
 		display: grid;
-		gap: 1rem;
+		gap: var(--space-4);
 	}
 
-	.queue-hero {
-		padding: 0.4rem 0;
-	}
-
-	.eyebrow {
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-		font-size: 0.78rem;
-		color: var(--muted);
-		font-weight: 700;
-	}
-
-	.lead {
-		max-width: 70ch;
-		color: var(--muted);
-	}
-
-	.card {
-		background: color-mix(in srgb, var(--card) 92%, transparent);
-		border: 1px solid var(--ring);
-		border-radius: 14px;
-		padding: 1rem;
+	.queue-card {
+		display: grid;
+		gap: var(--space-3);
 		backdrop-filter: blur(2px);
 	}
 
 	.actions {
 		display: flex;
-		gap: 0.7rem;
+		gap: var(--space-2);
 		align-items: end;
 		flex-wrap: wrap;
 	}
 
 	label {
 		display: grid;
-		gap: 0.25rem;
+		gap: var(--space-1);
 		min-width: 180px;
 	}
 
 	label span {
-		font-size: 0.8rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 
 	button {
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		padding: 0.5rem 0.65rem;
 		font: inherit;
@@ -635,37 +622,54 @@
 		color: var(--text);
 		cursor: pointer;
 		font-weight: 600;
+		font-size: var(--font-small);
+	}
+
+	button:disabled {
+		opacity: 0.62;
+		cursor: not-allowed;
 	}
 
 	input,
 	select {
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		padding: 0.45rem 0.55rem;
 		font: inherit;
 		background: color-mix(in srgb, var(--card) 95%, transparent);
 		color: var(--text);
+		font-size: var(--font-small);
+	}
+
+	.summary-line {
+		margin: 0;
+		font-size: var(--font-small);
+		color: var(--muted);
 	}
 
 	.table-wrap {
 		overflow-x: auto;
+		border: 1px solid var(--ring);
+		border-radius: var(--radius-md);
+		background: color-mix(in srgb, var(--card) 96%, transparent);
 	}
 
 	table {
 		width: 100%;
 		border-collapse: collapse;
-		font-size: 0.9rem;
+		font-size: var(--font-body);
 	}
 
 	th,
 	td {
-		padding: 0.55rem;
+		padding: var(--space-2) var(--space-3);
 		border-bottom: 1px solid var(--ring);
 		text-align: left;
+		vertical-align: top;
 	}
 
 	th {
-		font-size: 0.76rem;
+		font-size: var(--font-label);
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		color: var(--muted);
@@ -701,24 +705,24 @@
 	.detail-grid {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 0.8rem;
+		gap: var(--space-3);
 	}
 
 	.detail-grid section {
 		display: grid;
-		gap: 0.45rem;
+		gap: var(--space-2);
 	}
 
 	.detail-heading {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--space-2);
 	}
 
 	.detail-grid h3 {
 		margin: 0;
-		font-size: 0.82rem;
+		font-size: var(--font-small);
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		color: var(--muted);
@@ -728,10 +732,11 @@
 		margin: 0;
 		max-height: 260px;
 		overflow: auto;
-		padding: 0.6rem;
-		border-radius: 8px;
+		padding: var(--space-3);
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		background: color-mix(in srgb, var(--bg) 70%, transparent);
+		font-size: var(--font-small);
 	}
 
 	.error {
@@ -740,23 +745,28 @@
 	}
 
 	.rollback-audit-list {
-		margin-top: 0.6rem;
+		margin-top: var(--space-3);
 	}
 
 	.pager {
 		display: flex;
 		justify-content: flex-end;
-		gap: 0.6rem;
-		margin-top: 0.9rem;
+		gap: var(--space-3);
+		margin-top: var(--space-4);
 	}
 
 	@media (max-width: 900px) {
 		.queue-shell {
-			width: min(100%, 96vw);
+			width: 96vw;
 		}
 
 		.detail-grid {
 			grid-template-columns: 1fr;
+		}
+
+		label,
+		button {
+			width: 100%;
 		}
 	}
 </style>

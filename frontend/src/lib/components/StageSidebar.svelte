@@ -27,13 +27,13 @@
 
 <style>
 	.utility-shell {
-		margin: 0.65rem auto 0;
-		width: min(1160px, 94vw);
+		margin: var(--space-3) auto 0;
+		width: min(var(--content-max), 94vw);
 		display: grid;
-		gap: 0.65rem;
-		padding: 0.75rem;
+		gap: var(--space-3);
+		padding: var(--space-4);
 		border: 1px solid var(--ring);
-		border-radius: 14px;
+		border-radius: var(--radius-lg);
 		background: color-mix(in srgb, var(--card) 90%, transparent);
 		backdrop-filter: blur(3px);
 	}
@@ -41,19 +41,19 @@
 	.intro {
 		display: flex;
 		justify-content: space-between;
-		gap: 0.7rem;
+		gap: var(--space-3);
 		align-items: baseline;
 		flex-wrap: wrap;
 	}
 
 	.intro p {
 		margin: 0;
-		font-size: 0.84rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 
 	.heading {
-		font-size: 0.74rem;
+		font-size: var(--font-label);
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
 		color: var(--muted);
@@ -62,13 +62,13 @@
 
 	.utility-links {
 		display: flex;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		flex-wrap: wrap;
 	}
 
 	a {
 		padding: 0.38rem 0.66rem;
-		font-size: 0.8rem;
+		font-size: var(--font-small);
 		text-decoration: none;
 		border-radius: 999px;
 		font-weight: 700;

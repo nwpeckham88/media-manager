@@ -70,11 +70,11 @@
 <style>
 	.panel {
 		display: grid;
-		gap: 0.9rem;
+		gap: var(--space-4);
 	}
 
 	header h2 {
-		margin: 0.2rem 0;
+		margin: var(--space-1) 0;
 		font-size: 1.3rem;
 	}
 
@@ -87,7 +87,7 @@
 		margin: 0;
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
-		font-size: 0.72rem;
+		font-size: var(--font-label);
 		font-weight: 700;
 		color: var(--muted);
 	}
@@ -95,16 +95,16 @@
 	.meta-row {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
-		gap: 0.55rem;
+		gap: var(--space-2);
 	}
 
 	.meta-row div {
 		border: 1px solid var(--ring);
 		border-radius: 12px;
-		padding: 0.65rem;
+		padding: var(--space-3);
 		background: color-mix(in srgb, var(--card) 90%, transparent);
 		display: grid;
-		gap: 0.1rem;
+		gap: var(--space-1);
 	}
 
 	.meta-row strong {
@@ -112,7 +112,7 @@
 	}
 
 	.meta-row span {
-		font-size: 0.8rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 
@@ -121,14 +121,14 @@
 		padding: 0;
 		margin: 0;
 		display: grid;
-		gap: 0.45rem;
+		gap: var(--space-2);
 	}
 
 	.root-list li {
 		display: flex;
 		justify-content: space-between;
-		gap: 0.5rem;
-		padding: 0.65rem;
+		gap: var(--space-2);
+		padding: var(--space-3);
 		border: 1px solid var(--ring);
 		border-radius: 12px;
 		background: color-mix(in srgb, var(--card) 95%, transparent);
@@ -140,19 +140,19 @@
 
 	.root-path {
 		margin: 0;
-		font-size: 0.76rem;
+		font-size: var(--font-small);
 		word-break: break-all;
 	}
 
 	.root-note {
-		margin: 0.2rem 0 0;
-		font-size: 0.83rem;
+		margin: var(--space-1) 0 0;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 
 	.total {
 		margin: 0;
-		font-size: 0.8rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 

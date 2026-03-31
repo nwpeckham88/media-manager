@@ -267,20 +267,21 @@
 <style>
 	.wizard-shell {
 		display: grid;
-		gap: 0.9rem;
+		gap: var(--space-4);
 	}
 
 	.steps {
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 0.5rem;
+		gap: var(--space-2);
 	}
 
 	.steps button {
 		border: 1px solid var(--ring);
-		padding: 0.55rem 0.5rem;
-		border-radius: 10px;
+		padding: var(--space-2) var(--space-2);
+		border-radius: var(--radius-md);
 		font-weight: 700;
+		font-size: var(--font-small);
 		background: color-mix(in srgb, var(--card) 94%, transparent);
 		color: var(--text);
 		cursor: pointer;
@@ -292,34 +293,34 @@
 	}
 
 	.steps button:disabled {
-		opacity: 0.55;
+		opacity: 0.62;
 		cursor: not-allowed;
 	}
 
 	.stage {
 		border: 1px solid var(--ring);
 		border-radius: 16px;
-		padding: 1rem;
+		padding: var(--space-4);
 		background: color-mix(in srgb, var(--card) 94%, transparent);
 	}
 
 	.final-step {
 		display: grid;
-		gap: 0.9rem;
+		gap: var(--space-4);
 	}
 
 	.policy-card {
 		display: grid;
-		gap: 0.45rem;
+		gap: var(--space-2);
 		border: 1px solid var(--ring);
 		border-radius: 12px;
-		padding: 0.72rem;
+		padding: var(--space-3);
 		background: color-mix(in srgb, var(--card) 94%, transparent);
 	}
 
 	.policy-card .label {
 		margin: 0;
-		font-size: 0.75rem;
+		font-size: var(--font-label);
 		text-transform: uppercase;
 		letter-spacing: 0.09em;
 		color: var(--muted);
@@ -327,13 +328,13 @@
 
 	.policy-card .muted {
 		margin: 0;
-		font-size: 0.85rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 
 	.policy-card label {
 		display: grid;
-		gap: 0.35rem;
+		gap: var(--space-2);
 		font-weight: 700;
 	}
 
@@ -343,6 +344,7 @@
 		padding: 0.42rem 0.5rem;
 		background: color-mix(in srgb, var(--card) 96%, transparent);
 		color: var(--text);
+		font-size: var(--font-small);
 	}
 
 	.actions {
@@ -354,13 +356,14 @@
 	.left,
 	.right {
 		display: flex;
-		gap: 0.5rem;
+		gap: var(--space-2);
 	}
 
 	.actions button {
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		padding: 0.52rem 0.86rem;
 		font-weight: 700;
+		font-size: var(--font-small);
 		border: 1px solid var(--ring);
 		cursor: pointer;
 		background: color-mix(in srgb, var(--card) 95%, transparent);
@@ -372,7 +375,7 @@
 	}
 
 	.actions button:disabled {
-		opacity: 0.55;
+		opacity: 0.62;
 		cursor: not-allowed;
 	}
 
@@ -384,7 +387,7 @@
 		.actions {
 			flex-direction: column;
 			align-items: stretch;
-			gap: 0.6rem;
+			gap: var(--space-3);
 		}
 
 		.left,

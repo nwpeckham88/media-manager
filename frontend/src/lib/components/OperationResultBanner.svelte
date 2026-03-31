@@ -30,12 +30,12 @@
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		gap: 0.6rem;
-		padding: 0.55rem 0.65rem;
-		border-radius: 10px;
+		gap: var(--space-3);
+		padding: var(--space-3) var(--space-4);
+		border-radius: var(--radius-md);
 		border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--ring));
 		background: color-mix(in srgb, var(--accent) 12%, transparent);
-		margin: 0.6rem 0;
+		margin: var(--space-3) 0;
 		flex-wrap: wrap;
 	}
 
@@ -46,7 +46,7 @@
 
 	.message {
 		margin: 0;
-		font-size: 0.82rem;
+		font-size: var(--font-small);
 	}
 
 	.error {
@@ -60,11 +60,11 @@
 
 	.next-link {
 		border: 1px solid var(--ring);
-		border-radius: 8px;
+		border-radius: var(--radius-md);
 		padding: 0.35rem 0.55rem;
 		text-decoration: none;
 		font-weight: 700;
-		font-size: 0.82rem;
+		font-size: var(--font-small);
 		background: color-mix(in srgb, var(--card) 95%, transparent);
 	}
 </style>

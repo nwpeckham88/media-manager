@@ -35,11 +35,11 @@
 <style>
 	.panel {
 		display: grid;
-		gap: 0.9rem;
+		gap: var(--space-4);
 	}
 
 	header h2 {
-		margin: 0.2rem 0;
+		margin: var(--space-1) 0;
 		font-size: 1.3rem;
 	}
 
@@ -52,23 +52,23 @@
 		margin: 0;
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
-		font-size: 0.72rem;
+		font-size: var(--font-label);
 		font-weight: 700;
 		color: var(--muted);
 	}
 
 	.modes {
 		display: grid;
-		gap: 0.6rem;
+		gap: var(--space-3);
 	}
 
 	label {
 		display: grid;
 		grid-template-columns: auto 1fr;
-		gap: 0.7rem;
+		gap: var(--space-3);
 		align-items: start;
 		border: 1px solid var(--ring);
-		padding: 0.75rem;
+		padding: var(--space-3);
 		border-radius: 12px;
 		cursor: pointer;
 		background: color-mix(in srgb, var(--card) 92%, transparent);
@@ -80,7 +80,7 @@
 	}
 
 	input {
-		margin-top: 0.25rem;
+		margin-top: var(--space-1);
 	}
 
 	strong {
@@ -88,12 +88,12 @@
 	}
 
 	p {
-		margin: 0.24rem 0;
+		margin: var(--space-1) 0;
 		color: var(--muted);
 	}
 
 	span {
-		font-size: 0.76rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 </style>

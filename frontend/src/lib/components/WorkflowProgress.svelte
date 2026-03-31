@@ -65,11 +65,11 @@
 
 <style>
 	.workflow-strip {
-		width: min(1160px, 94vw);
-		margin: 0.7rem auto 0;
-		padding: 0.8rem;
+		width: min(var(--content-max), 94vw);
+		margin: var(--space-3) auto 0;
+		padding: var(--space-4);
 		border: 1px solid var(--ring);
-		border-radius: 16px;
+		border-radius: var(--radius-lg);
 		background: color-mix(in srgb, var(--card) 93%, transparent);
 		backdrop-filter: blur(4px);
 	}
@@ -77,15 +77,15 @@
 	.progress-head {
 		display: flex;
 		justify-content: space-between;
-		gap: 0.6rem;
+		gap: var(--space-3);
 		align-items: baseline;
 		flex-wrap: wrap;
-		margin-bottom: 0.55rem;
+		margin-bottom: var(--space-3);
 	}
 
 	.progress-head p {
 		margin: 0;
-		font-size: 0.84rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 
@@ -97,18 +97,18 @@
 	.track {
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 0.45rem;
+		gap: var(--space-2);
 	}
 
 	a {
 		display: flex;
 		align-items: center;
-		gap: 0.45rem;
-		padding: 0.5rem 0.6rem;
-		border-radius: 10px;
+		gap: var(--space-2);
+		padding: var(--space-2) var(--space-3);
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		text-decoration: none;
-		font-size: 0.8rem;
+		font-size: var(--font-small);
 		font-weight: 700;
 		background: color-mix(in srgb, var(--card) 90%, transparent);
 	}
@@ -120,7 +120,7 @@
 		height: 1.2rem;
 		border-radius: 999px;
 		font-weight: 700;
-		font-size: 0.72rem;
+		font-size: var(--font-label);
 		background: color-mix(in srgb, var(--card) 75%, var(--bg-alt));
 	}
 

@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import OperationResultBanner from '$lib/components/OperationResultBanner.svelte';
+	import PageHero from '$lib/components/ui/PageHero.svelte';
+	import SectionHeader from '$lib/components/ui/SectionHeader.svelte';
+	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import {
 		mergeWorkflowProgress,
 		nextIncompleteStage,
@@ -235,40 +238,34 @@
 </svelte:head>
 
 <main class="dashboard-shell">
-	<section class="hero">
-		<div>
-			<p class="eyebrow">Workflow Hub</p>
-			<h1>Operate Your Jellyfin Library With Guardrails</h1>
-			<p class="lead">
-				Run staged operations in sequence and keep every action auditable, reversible, and portable beyond this app.
-			</p>
-		</div>
-		<p class="mono stamp">Snapshot: {new Date(refreshedAtIso).toLocaleString()}</p>
+	<PageHero
+		eyebrow="Workflow Hub"
+		title="Operate Your Jellyfin Library With Guardrails"
+		lead="Run staged operations in sequence and keep every action auditable, reversible, and portable beyond this app."
+		stamp={`Snapshot: ${new Date(refreshedAtIso).toLocaleString()}`}
+	>
 		<div class="hero-actions">
 			<a href={workflowNextHref}>{workflowNextLabel}</a>
 			<a href="/queue">Inspect Queue</a>
 			<a href="/operations">Review Operations</a>
 		</div>
-	</section>
+	</PageHero>
 
 	<OperationResultBanner notice={workflowNotice} nextHref={workflowNextHref} nextLabel={workflowNextLabel} />
 
 	<section class="metrics-grid" aria-label="Library Status Metrics">
 		{#each scorecards as card}
-			<article class="metric-card">
+			<SurfaceCard className="metric-card" compact>
 				<p class="mono metric-label">{card.label}</p>
-				<h2>{card.value}</h2>
-				<p>{card.detail}</p>
-			</article>
+				<h2 class="metric-value">{card.value}</h2>
+				<p class="metric-detail">{card.detail}</p>
+			</SurfaceCard>
 		{/each}
 	</section>
 
 	<section class="row-grid">
-		<article class="card stage-map">
-			<div class="split-head">
-				<h2>Stage Map</h2>
-				<a href={workflowNextHref}>Resume Next Stage</a>
-			</div>
+		<SurfaceCard className="stage-map">
+			<SectionHeader title="Stage Map" href={workflowNextHref} label="Resume Next Stage" />
 			<div class="stage-grid">
 				{#each WORKFLOW_STAGES as card}
 					<article class="stage-card" class:done={workflowState[card.key]}>
@@ -280,13 +277,10 @@
 					</article>
 				{/each}
 			</div>
-		</article>
+		</SurfaceCard>
 
-		<article class="card recent-jobs">
-			<div class="split-head">
-				<h2>Recent Jobs</h2>
-				<a href="/queue">Open Full Queue</a>
-			</div>
+		<SurfaceCard className="recent-jobs">
+			<SectionHeader title="Recent Jobs" href="/queue" label="Open Full Queue" />
 			{#if recentJobsState.ok && recentJobsState.data}
 				<ul class="jobs mono">
 					{#if recentJobsState.data.items.length === 0}
@@ -308,137 +302,79 @@
 			{:else}
 				<p class="error">{recentJobsState.error ?? 'Unable to read recent jobs.'}</p>
 			{/if}
-		</article>
+		</SurfaceCard>
 	</section>
 </main>
 
 <style>
 	.dashboard-shell {
-		width: min(1160px, 94vw);
-		margin: 1rem auto 3rem;
+		width: min(var(--content-max), 94vw);
+		margin: var(--space-4) auto calc(var(--space-6) * 2);
 		display: grid;
-		gap: 0.9rem;
+		gap: var(--space-4);
 		animation: rise 260ms ease-out;
-	}
-
-	.hero,
-	.card,
-	.metric-card {
-		border: 1px solid var(--ring);
-		border-radius: 16px;
-		padding: 1rem;
-		background: color-mix(in srgb, var(--card) 92%, transparent);
-		box-shadow: var(--shadow);
-	}
-
-	.hero {
-		display: grid;
-		gap: 0.9rem;
-		background:
-			radial-gradient(circle at 88% 8%, color-mix(in srgb, var(--accent) 24%, transparent), transparent 40%),
-			color-mix(in srgb, var(--card) 94%, transparent);
-	}
-
-	.eyebrow {
-		margin: 0;
-		text-transform: uppercase;
-		letter-spacing: 0.13em;
-		font-size: 0.74rem;
-		color: var(--muted);
-		font-weight: 700;
-	}
-
-	h1 {
-		margin: 0.35rem 0;
-		font-size: clamp(1.55rem, 3.2vw, 2.3rem);
-		max-width: 23ch;
-	}
-
-	.lead {
-		margin: 0;
-		color: var(--muted);
-		max-width: 65ch;
-	}
-
-	.stamp {
-		margin: 0;
-		font-size: 0.77rem;
-		color: var(--muted);
 	}
 
 	.hero-actions {
 		display: flex;
-		gap: 0.55rem;
+		gap: var(--space-2);
 		flex-wrap: wrap;
 	}
 
 	.hero-actions a,
-	.split-head a,
 	.stage-card a {
 		border: 1px solid var(--ring);
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		padding: 0.42rem 0.65rem;
 		text-decoration: none;
 		font-weight: 700;
-		font-size: 0.84rem;
+		font-size: var(--font-small);
 		background: color-mix(in srgb, var(--card) 95%, transparent);
 	}
 
 	.metrics-grid {
 		display: grid;
 		grid-template-columns: repeat(4, minmax(0, 1fr));
-		gap: 0.7rem;
+		gap: var(--space-3);
 	}
 
-	.metric-card h2 {
-		margin: 0.2rem 0;
+	.metric-value {
+		margin: var(--space-1) 0;
 		font-size: 2.05rem;
 	}
 
 	.metric-label {
 		margin: 0;
-		font-size: 0.74rem;
+		font-size: var(--font-label);
 		letter-spacing: 0.09em;
 		text-transform: uppercase;
 		color: var(--muted);
 	}
 
-	.metric-card p {
+	.metric-detail {
 		margin: 0;
 		color: var(--muted);
-		font-size: 0.85rem;
+		font-size: var(--font-small);
 	}
 
 	.row-grid {
 		display: grid;
 		grid-template-columns: 1.65fr 1fr;
-		gap: 0.7rem;
-	}
-
-	.split-head {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		gap: 0.55rem;
-		margin-bottom: 0.65rem;
-	}
-
-	.split-head h2 {
-		margin: 0;
+		gap: var(--space-3);
 	}
 
 	.stage-grid {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
-		gap: 0.55rem;
+		gap: var(--space-2);
 	}
 
 	.stage-card {
 		display: grid;
-		gap: 0.44rem;
+		gap: var(--space-2);
 		border: 1px solid var(--ring);
-		border-radius: 12px;
-		padding: 0.72rem;
+		border-radius: var(--radius-md);
+		padding: var(--space-3);
 		background: color-mix(in srgb, var(--card) 90%, transparent);
 	}
 
@@ -456,7 +392,7 @@
 	}
 
 	.stage-status {
-		font-size: 0.74rem;
+		font-size: var(--font-label);
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
 		font-weight: 700;
@@ -467,26 +403,26 @@
 		margin: 0;
 		padding: 0;
 		display: grid;
-		gap: 0.5rem;
+		gap: var(--space-2);
 	}
 
 	.jobs li {
 		display: flex;
 		justify-content: space-between;
-		gap: 0.6rem;
-		padding-bottom: 0.45rem;
+		gap: var(--space-3);
+		padding-bottom: var(--space-2);
 		border-bottom: 1px dashed var(--ring);
 	}
 
 	.jobs span {
 		display: block;
-		font-size: 0.81rem;
+		font-size: var(--font-small);
 	}
 
 	.jobs small {
 		display: block;
-		margin-top: 0.18rem;
-		font-size: 0.74rem;
+		margin-top: var(--space-1);
+		font-size: var(--font-label);
 		color: var(--danger);
 	}
 
@@ -521,11 +457,6 @@
 		.metrics-grid,
 		.stage-grid {
 			grid-template-columns: 1fr;
-		}
-
-		.split-head {
-			flex-direction: column;
-			align-items: flex-start;
 		}
 
 		.jobs li {

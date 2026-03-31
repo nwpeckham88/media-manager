@@ -114,8 +114,8 @@
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		gap: 0.9rem;
-		padding: 0.75rem 1rem;
+		gap: var(--space-4);
+		padding: var(--space-3) var(--space-4);
 		background: color-mix(in srgb, var(--bg) 78%, transparent);
 		backdrop-filter: blur(8px);
 		border-bottom: 1px solid var(--ring);
@@ -123,12 +123,12 @@
 
 	.brand-wrap {
 		display: grid;
-		gap: 0.08rem;
+		gap: var(--space-1);
 	}
 
 	.product-name {
 		margin: 0;
-		font-size: 0.78rem;
+		font-size: var(--font-tiny);
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
 		font-weight: 700;
@@ -137,13 +137,13 @@
 
 	.product-tagline {
 		margin: 0;
-		font-size: 0.88rem;
+		font-size: var(--font-body);
 		font-weight: 700;
 	}
 
 	.main-nav {
 		display: flex;
-		gap: 0.55rem;
+		gap: var(--space-2);
 		flex-wrap: wrap;
 		justify-content: center;
 	}
@@ -153,7 +153,7 @@
 		border-radius: 999px;
 		text-decoration: none;
 		font-weight: 600;
-		font-size: 0.84rem;
+		font-size: var(--font-small);
 		background: color-mix(in srgb, var(--card) 90%, transparent);
 		border: 1px solid var(--ring);
 	}
@@ -165,16 +165,16 @@
 
 	.gate-loader {
 		width: min(920px, 94vw);
-		margin: 1.2rem auto;
-		padding: 1rem;
+		margin: var(--space-5) auto;
+		padding: var(--space-4);
 		border: 1px solid var(--ring);
-		border-radius: 14px;
+		border-radius: var(--radius-lg);
 		background: color-mix(in srgb, var(--card) 92%, transparent);
 	}
 
 	.gate-loader p {
 		margin: 0;
-		font-size: 0.84rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 
@@ -185,9 +185,9 @@
 	@media (max-width: 1000px) {
 		.theme-wrap {
 			position: static;
-			padding-top: 0.65rem;
+			padding-top: var(--space-3);
 			align-items: flex-start;
-			gap: 0.6rem;
+			gap: var(--space-3);
 			flex-direction: column;
 		}
 

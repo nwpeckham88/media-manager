@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { get } from 'svelte/store';
+	import PageHero from '$lib/components/ui/PageHero.svelte';
+	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import { appSettings, updateAppSettings, type DashboardRefreshPolicy } from '$lib/workflow/settings';
 	import type { HashingMode } from '$lib/workflow/onboarding';
 
@@ -23,18 +25,19 @@
 </svelte:head>
 
 <main class="settings-shell">
-	<section class="hero card">
-		<p class="eyebrow">Configuration Hub</p>
-		<h1>High-Level Workflow Settings</h1>
-		<p>Configure indexing and merge policies in one place. These defaults are used by onboarding.</p>
+	<PageHero
+		eyebrow="Configuration Hub"
+		title="High-Level Workflow Settings"
+		lead="Configure indexing and merge policies in one place. These defaults are used by onboarding."
+	>
 		{#if notice}
 			<p class="notice mono">{notice}</p>
 		{/if}
-	</section>
+	</PageHero>
 
-	<section class="card">
+	<SurfaceCard as="section">
 		<h2>Onboarding Defaults</h2>
-		<p class="mono muted">These values prefill the guided setup flow on first boot.</p>
+		<p class="mono muted summary-line">These values prefill the guided setup flow on first boot.</p>
 		<div class="field-grid">
 			<article>
 				<p class="label mono">Default Indexing Mode</p>
@@ -47,9 +50,9 @@
 				<p class="muted">Canonical naming is mandatory for semantic-merge normalization.</p>
 			</article>
 		</div>
-	</section>
+	</SurfaceCard>
 
-	<section class="card">
+	<SurfaceCard as="section">
 		<h2>Runtime Behavior</h2>
 		<div class="field-grid one-col">
 			<article>
@@ -64,7 +67,7 @@
 				<p class="muted">Semantic duplicates: canonical naming normalization is mandatory after merge.</p>
 			</article>
 		</div>
-	</section>
+	</SurfaceCard>
 
 	<div class="actions">
 		<button type="button" onclick={saveSettings}>Save Settings</button>
@@ -73,47 +76,29 @@
 
 <style>
 	.settings-shell {
-		width: min(980px, 94vw);
-		margin: 1rem auto 3rem;
+		width: min(var(--content-max), 94vw);
+		margin: var(--space-4) auto calc(var(--space-6) * 2);
 		display: grid;
-		gap: 0.9rem;
+		gap: var(--space-4);
 	}
 
-	.card {
-		border: 1px solid var(--ring);
-		border-radius: 14px;
-		padding: 1rem;
-		background: color-mix(in srgb, var(--card) 92%, transparent);
-	}
-
-	.hero h1 {
-		margin: 0.25rem 0;
-	}
-
-	.hero p,
+	.summary-line,
 	.muted {
 		margin: 0;
 		color: var(--muted);
-	}
-
-	.eyebrow {
-		margin: 0;
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-		font-size: 0.75rem;
-		font-weight: 700;
-		color: var(--muted);
+		font-size: var(--font-small);
 	}
 
 	.notice {
-		margin-top: 0.45rem;
+		margin: 0;
 		color: var(--accent);
+		font-size: var(--font-small);
 	}
 
 	.field-grid {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
-		gap: 0.8rem;
+		gap: var(--space-3);
 	}
 
 	.field-grid.one-col {
@@ -122,16 +107,16 @@
 
 	article {
 		display: grid;
-		gap: 0.45rem;
+		gap: var(--space-2);
 		border: 1px solid var(--ring);
-		border-radius: 10px;
-		padding: 0.72rem;
+		border-radius: var(--radius-md);
+		padding: var(--space-3);
 		background: color-mix(in srgb, var(--card) 95%, transparent);
 	}
 
 	.label {
 		margin: 0;
-		font-size: 0.76rem;
+		font-size: var(--font-label);
 		text-transform: uppercase;
 		letter-spacing: 0.09em;
 		color: var(--muted);
@@ -140,8 +125,9 @@
 	label {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: var(--space-2);
 		font-weight: 600;
+		font-size: var(--font-small);
 	}
 
 	.actions {
@@ -150,18 +136,32 @@
 	}
 
 	button {
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		padding: 0.52rem 0.82rem;
 		font: inherit;
 		font-weight: 700;
+		font-size: var(--font-small);
 		background: color-mix(in srgb, var(--card) 95%, transparent);
 		cursor: pointer;
+	}
+
+	button:disabled {
+		opacity: 0.62;
+		cursor: not-allowed;
 	}
 
 	@media (max-width: 820px) {
 		.field-grid {
 			grid-template-columns: 1fr;
+		}
+
+		button {
+			width: 100%;
+		}
+
+		.actions {
+			justify-content: stretch;
 		}
 	}
 </style>

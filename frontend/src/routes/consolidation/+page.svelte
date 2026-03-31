@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import OperationResultBanner from '$lib/components/OperationResultBanner.svelte';
+	import PageHero from '$lib/components/ui/PageHero.svelte';
+	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import { markStageComplete, markStageIncomplete } from '$lib/workflow/progress';
 
 	type IndexStatsResponse = {
@@ -666,44 +668,47 @@
 </svelte:head>
 
 <main class="stage-shell">
-	<section class="hero">
-		<p class="eyebrow">Stage 1</p>
-		<h1>Consolidation</h1>
-		<p class="lead">Run library-wide indexing (hash + ffprobe), then review exact duplicate files before metadata and formatting passes.</p>
-	</section>
+	<PageHero
+		eyebrow="Stage 1"
+		title="Consolidation"
+		lead="Run library-wide indexing (hash + ffprobe), then review exact duplicate files before metadata and formatting passes."
+	/>
 
-	<section class="card">
-		<div class="actions">
+	<section class="stage-card">
+		<SurfaceCard as="div">
+			<div class="actions">
 			<button type="button" onclick={startIndexing} disabled={indexing || loading}>Start Full Index</button>
 			<button type="button" onclick={refresh} disabled={loading}>Refresh</button>
 			<button type="button" onclick={rollbackRecentOps} disabled={rollbacking || rollbackOperationIds.length === 0}>
 				{rollbacking ? 'Rolling Back...' : 'Rollback Session Ops'}
 			</button>
 			<a class="queue-link" href="/queue">Queue</a>
-		</div>
-		<OperationResultBanner notice={notice} error={error} nextHref="/metadata" nextLabel="Next: Metadata" />
+			</div>
+			<OperationResultBanner notice={notice} error={error} nextHref="/metadata" nextLabel="Next: Metadata" />
 
-		{#if rollbackResult}
-			<p class="mono">rollback total={rollbackResult.total_items} ok={rollbackResult.succeeded} fail={rollbackResult.failed}</p>
-		{/if}
+			{#if rollbackResult}
+				<p class="mono summary-line">rollback total={rollbackResult.total_items} ok={rollbackResult.succeeded} fail={rollbackResult.failed}</p>
+			{/if}
 
-		{#if stats}
-			<ul class="rows mono">
-				<li><span>Indexed Files</span><strong>{stats.total_indexed}</strong></li>
-				<li><span>Hashed Files</span><strong>{stats.hashed}</strong></li>
-				<li><span>FFprobe Enriched</span><strong>{stats.probed}</strong></li>
-				<li><span>Last Index</span><strong>{stats.last_indexed_at_ms ? new Date(stats.last_indexed_at_ms).toLocaleString() : 'never'}</strong></li>
-			</ul>
-		{/if}
+			{#if stats}
+				<ul class="rows mono">
+					<li><span>Indexed Files</span><strong>{stats.total_indexed}</strong></li>
+					<li><span>Hashed Files</span><strong>{stats.hashed}</strong></li>
+					<li><span>FFprobe Enriched</span><strong>{stats.probed}</strong></li>
+					<li><span>Last Index</span><strong>{stats.last_indexed_at_ms ? new Date(stats.last_indexed_at_ms).toLocaleString() : 'never'}</strong></li>
+				</ul>
+			{/if}
+		</SurfaceCard>
 	</section>
 
-	<section class="card">
-		<h2>Exact Duplicate Groups</h2>
-		<p class="mono">Choose which file to keep for each exact-hash group. The rest are quarantined.</p>
+	<section class="stage-card">
+		<SurfaceCard as="div">
+			<h2>Exact Duplicate Groups</h2>
+			<p class="mono summary-line">Choose which file to keep for each exact-hash group. The rest are quarantined.</p>
 		{#if loading}
-			<p class="mono">Loading groups...</p>
+			<p class="mono summary-line">Loading groups...</p>
 		{:else if exactGroups.length === 0}
-			<p class="mono">No exact duplicate groups detected yet.</p>
+			<p class="mono summary-line">No exact duplicate groups detected yet.</p>
 		{:else}
 			<div class="group-grid">
 				{#each exactGroups as group}
@@ -732,29 +737,31 @@
 				{/each}
 			</div>
 		{/if}
+		</SurfaceCard>
 	</section>
 
-	<section class="card">
-		<h2>Semantic Duplicate Groups</h2>
-		<p class="mono">Same parsed title/year/provider with multiple file variants.</p>
-		<p class="mono">Use "Show Planned Result" to preview canonical UID and rename targets before merge.</p>
-		<p class="mono merge-policy">
+	<section class="stage-card">
+		<SurfaceCard as="div">
+			<h2>Semantic Duplicate Groups</h2>
+			<p class="mono summary-line">Same parsed title/year/provider with multiple file variants.</p>
+			<p class="mono summary-line">Use "Show Planned Result" to preview canonical UID and rename targets before merge.</p>
+			<p class="mono merge-policy">
 			Merge policy: canonical naming is mandatory. All matched items are normalized to
 			<code>Movie Name - Subtitle (Year)</code> with spaces preserved and invalid characters replaced by <code>-</code>, and linked stem-matching
 			metadata assets are renamed with the media file.
-		</p>
-		<div class="actions">
+			</p>
+			<div class="actions">
 			<button type="button" onclick={mergeAllSemanticShows} disabled={loading || mergingAllShows || mergingKey !== null || semanticShowGroups.length === 0}>
 				{mergingAllShows ? 'Merging All...' : 'Merge All Shows'}
 			</button>
 			{#if mergeAllProgress}
 				<p class="mono merge-progress">{mergeAllProgress}</p>
 			{/if}
-		</div>
+			</div>
 		{#if loading}
-			<p class="mono">Loading semantic groups...</p>
+			<p class="mono summary-line">Loading semantic groups...</p>
 		{:else if semanticShowGroups.length === 0}
-			<p class="mono">No semantic duplicate groups detected yet.</p>
+			<p class="mono summary-line">No semantic duplicate groups detected yet.</p>
 		{:else}
 			<div class="group-grid">
 				{#each semanticShowGroups as group}
@@ -813,6 +820,7 @@
 				{/each}
 			</div>
 		{/if}
+		</SurfaceCard>
 	</section>
 
 	{#if exactKeepModalOpen && modalGroup}
@@ -864,48 +872,29 @@
 
 <style>
 	.stage-shell {
-		width: min(1100px, 92vw);
-		margin: 0 auto 3rem;
+		width: min(var(--content-max), 94vw);
+		margin: var(--space-4) auto calc(var(--space-6) * 2);
 		display: grid;
-		gap: 1rem;
+		gap: var(--space-4);
 	}
 
-	.hero {
-		padding: 0.4rem 0;
-	}
-
-	.eyebrow {
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-		font-size: 0.78rem;
-		color: var(--muted);
-		font-weight: 700;
-	}
-
-	.lead {
-		max-width: 72ch;
-		color: var(--muted);
-	}
-
-	.card {
-		background: color-mix(in srgb, var(--card) 92%, transparent);
-		border: 1px solid var(--ring);
-		border-radius: 14px;
-		padding: 1rem;
+	.stage-card {
+		display: grid;
+		gap: var(--space-3);
 		backdrop-filter: blur(2px);
 	}
 
 	.actions {
 		display: flex;
-		gap: 0.7rem;
+		gap: var(--space-2);
 		align-items: center;
 		flex-wrap: wrap;
-		margin-bottom: 0.8rem;
+		margin-bottom: var(--space-3);
 	}
 
 	button,
 	.queue-link {
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		padding: 0.5rem 0.65rem;
 		font: inherit;
@@ -913,10 +902,22 @@
 		color: var(--text);
 		font-weight: 700;
 		text-decoration: none;
+		font-size: var(--font-small);
 	}
 
 	button {
 		cursor: pointer;
+	}
+
+	button:disabled {
+		opacity: 0.62;
+		cursor: not-allowed;
+	}
+
+	.summary-line {
+		margin: 0;
+		font-size: var(--font-small);
+		color: var(--muted);
 	}
 
 	.rows {
@@ -924,32 +925,32 @@
 		padding: 0;
 		margin: 0;
 		display: grid;
-		gap: 0.45rem;
+		gap: var(--space-2);
 	}
 
 	.rows li {
 		display: flex;
 		justify-content: space-between;
-		gap: 0.7rem;
+		gap: var(--space-3);
 		border-bottom: 1px dashed var(--ring);
-		padding-bottom: 0.3rem;
+		padding-bottom: var(--space-2);
 	}
 
 	.group-grid {
 		display: grid;
-		gap: 0.8rem;
+		gap: var(--space-3);
 	}
 
 	.group-card {
 		border: 1px solid var(--ring);
-		border-radius: 10px;
-		padding: 0.7rem;
+		border-radius: var(--radius-md);
+		padding: var(--space-3);
 		background: color-mix(in srgb, var(--card) 87%, transparent);
 	}
 
 	.merge-policy {
-		margin: 0.55rem 0 0.9rem;
-		font-size: 0.9rem;
+		margin: var(--space-2) 0 var(--space-4);
+		font-size: var(--font-body);
 		color: var(--muted);
 	}
 
@@ -960,9 +961,9 @@
 
 	.plan-box {
 		border: 1px solid var(--ring);
-		border-radius: 10px;
-		padding: 0.65rem;
-		margin-bottom: 0.65rem;
+		border-radius: var(--radius-md);
+		padding: var(--space-3);
+		margin-bottom: var(--space-3);
 		background: color-mix(in srgb, var(--card) 92%, transparent);
 	}
 
@@ -972,7 +973,7 @@
 
 	.plan-box .muted {
 		color: var(--muted);
-		margin-top: 0.45rem;
+		margin-top: var(--space-2);
 	}
 
 	.modal-backdrop {
@@ -981,7 +982,7 @@
 		z-index: 35;
 		display: grid;
 		place-items: center;
-		padding: 1rem;
+		padding: var(--space-4);
 		background: color-mix(in srgb, #0b1218 48%, transparent);
 		backdrop-filter: blur(3px);
 	}
@@ -991,11 +992,11 @@
 		max-height: 88vh;
 		overflow: auto;
 		border: 1px solid var(--ring);
-		border-radius: 14px;
-		padding: 1rem;
+		border-radius: var(--radius-lg);
+		padding: var(--space-4);
 		background: color-mix(in srgb, var(--card) 96%, transparent);
 		display: grid;
-		gap: 0.7rem;
+		gap: var(--space-3);
 	}
 
 	.modal h3 {
@@ -1004,7 +1005,7 @@
 
 	.modal-note {
 		margin: 0;
-		font-size: 0.8rem;
+		font-size: var(--font-small);
 		color: var(--muted);
 	}
 
@@ -1013,13 +1014,13 @@
 		margin: 0;
 		padding: 0;
 		display: grid;
-		gap: 0.55rem;
+		gap: var(--space-2);
 	}
 
 	.modal-list li {
 		border: 1px solid var(--ring);
-		border-radius: 10px;
-		padding: 0.65rem;
+		border-radius: var(--radius-md);
+		padding: var(--space-3);
 		background: color-mix(in srgb, var(--card) 92%, transparent);
 	}
 
@@ -1031,19 +1032,19 @@
 	.modal-list label {
 		display: grid;
 		grid-template-columns: auto 1fr;
-		gap: 0.65rem;
+		gap: var(--space-3);
 		align-items: flex-start;
 	}
 
 	.path {
 		margin: 0;
-		font-size: 0.79rem;
+		font-size: var(--font-small);
 		word-break: break-all;
 	}
 
 	.meta {
-		margin: 0.24rem 0 0;
-		font-size: 0.84rem;
+		margin: var(--space-1) 0 0;
+		font-size: var(--font-small);
 	}
 
 	.meta.muted {
@@ -1051,11 +1052,27 @@
 	}
 
 	.recommended {
-		margin: 0.22rem 0 0;
-		font-size: 0.74rem;
+		margin: var(--space-1) 0 0;
+		font-size: var(--font-label);
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		color: var(--accent);
+	}
+
+	@media (max-width: 760px) {
+		button,
+		.queue-link {
+			width: 100%;
+			text-align: center;
+		}
+
+		.rows li {
+			flex-direction: column;
+		}
+
+		.modal-list label {
+			grid-template-columns: 1fr;
+		}
 	}
 
 </style>

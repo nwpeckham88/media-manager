@@ -66,7 +66,7 @@
 		z-index: 30;
 		display: grid;
 		place-items: center;
-		padding: 1rem;
+		padding: var(--space-4);
 		background: color-mix(in srgb, #0b1218 42%, transparent);
 		backdrop-filter: blur(3px);
 	}
@@ -74,9 +74,9 @@
 	.confirm-dialog {
 		width: min(520px, 94vw);
 		display: grid;
-		gap: 0.8rem;
-		padding: 1rem;
-		border-radius: 14px;
+		gap: var(--space-3);
+		padding: var(--space-4);
+		border-radius: var(--radius-lg);
 		border: 1px solid var(--ring);
 		background: color-mix(in srgb, var(--card) 96%, transparent);
 		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
@@ -84,7 +84,7 @@
 
 	h2 {
 		margin: 0;
-		font-size: 1rem;
+		font-size: var(--font-body);
 	}
 
 	p {
@@ -96,15 +96,16 @@
 	.actions {
 		display: flex;
 		justify-content: flex-end;
-		gap: 0.55rem;
+		gap: var(--space-2);
 	}
 
 	button {
-		border-radius: 10px;
+		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
 		padding: 0.5rem 0.72rem;
 		font: inherit;
 		font-weight: 700;
+		font-size: var(--font-small);
 		cursor: pointer;
 	}
 
