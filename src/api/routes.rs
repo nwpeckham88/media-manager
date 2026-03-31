@@ -38,6 +38,8 @@ const DEFAULT_RECENT_LIMIT: usize = 20;
 const MAX_RECENT_LIMIT: usize = 200;
 const DEFAULT_LIBRARY_LIMIT: usize = 120;
 const MAX_LIBRARY_LIMIT: usize = 500;
+const MAX_PATH_COMPONENT_BYTES: usize = 255;
+const MAX_PATH_BYTES: usize = 4096;
 static FS_OPERATION_NONCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
@@ -1919,6 +1921,23 @@ fn execute_bulk_apply(
             let source_path = PathBuf::from(&item.media_path);
             let target_path = PathBuf::from(&target_path_value);
 
+            if let Err((_, err)) = ensure_media_file_path_allowed(&source_path, &state.library_roots)
+            {
+                applied_items.push(BulkApplyItemResult {
+                    media_path: item.media_path,
+                    final_media_path: Some(target_path_value),
+                    item_uid: item.item_uid,
+                    applied_provider_id: None,
+                    success: false,
+                    operation_id: None,
+                    sidecar_path: None,
+                    error: Some(format!(
+                        "rename source changed after preview and is no longer valid: {err}"
+                    )),
+                });
+                continue;
+            }
+
             if source_path == target_path {
                 applied_items.push(BulkApplyItemResult {
                     media_path: item.media_path,
@@ -2577,13 +2596,16 @@ fn compute_rename_target(
         return Err("rename target stem is empty after normalization".to_string());
     }
 
-    let normalized = if let Some(year) = inferred.year {
-        format!("{final_title} ({year})")
-    } else {
-        final_title
-    };
+    let should_move_parent = should_move_into_canonical_folder(parent, file_stem);
+    let (normalized, was_truncated) = build_rename_stem_with_limits(
+        parent,
+        should_move_parent,
+        &final_title,
+        inferred.year,
+        &extension,
+    )?;
 
-    let target_parent = if should_move_into_canonical_folder(parent, file_stem) {
+    let target_parent = if should_move_parent {
         parent.with_file_name(&normalized)
     } else {
         parent.to_path_buf()
@@ -2598,16 +2620,90 @@ fn compute_rename_target(
     }
 
     if target.exists() {
+        if was_truncated {
+            return Err(format!(
+                "rename collision after truncation: target already exists ({})",
+                target.display()
+            ));
+        }
         return Err(format!(
             "rename collision: target already exists ({})",
             target.display()
         ));
     }
 
-    Ok((
-        target,
-        "will rename to Movie Name - Subtitle (Year) format".to_string(),
-    ))
+    let note = if was_truncated {
+        "will rename to Movie Name - Subtitle (Year) format (truncated to fit filesystem limits)"
+            .to_string()
+    } else {
+        "will rename to Movie Name - Subtitle (Year) format".to_string()
+    };
+
+    Ok((target, note))
+}
+
+fn build_rename_stem_with_limits(
+    source_parent: &std::path::Path,
+    move_into_canonical_parent: bool,
+    title: &str,
+    year: Option<u16>,
+    extension: &str,
+) -> Result<(String, bool), String> {
+    let suffix = year
+        .map(|value| format!(" ({value})"))
+        .unwrap_or_default();
+    let mut title_candidate = title.trim().to_string();
+    if title_candidate.is_empty() {
+        return Err("rename target stem is empty after normalization".to_string());
+    }
+
+    let mut truncated = false;
+    loop {
+        let stem = format!("{title_candidate}{suffix}");
+        if rename_stem_fits_limits(source_parent, move_into_canonical_parent, &stem, extension) {
+            return Ok((stem, truncated));
+        }
+
+        truncated = true;
+        let Some(_) = title_candidate.pop() else {
+            break;
+        };
+        title_candidate = title_candidate
+            .trim_end_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == '_')
+            .to_string();
+        if title_candidate.is_empty() {
+            title_candidate = "untitled".to_string();
+        }
+    }
+
+    Err("rename target exceeds filesystem limits and cannot be truncated safely".to_string())
+}
+
+
+fn rename_stem_fits_limits(
+    source_parent: &std::path::Path,
+    move_into_canonical_parent: bool,
+    stem: &str,
+    extension: &str,
+) -> bool {
+    let stem_bytes = stem.as_bytes().len();
+    if stem_bytes > MAX_PATH_COMPONENT_BYTES {
+        return false;
+    }
+
+    let file_name = format!("{stem}{extension}");
+    if file_name.as_bytes().len() > MAX_PATH_COMPONENT_BYTES {
+        return false;
+    }
+
+    let target_parent = if move_into_canonical_parent {
+        source_parent.with_file_name(stem)
+    } else {
+        source_parent.to_path_buf()
+    };
+
+    let target_path = target_parent.join(&file_name);
+    target_path.to_string_lossy().as_bytes().len() <= MAX_PATH_BYTES
 }
 
 fn sanitize_display_filename_component(value: &str) -> String {
@@ -2759,12 +2855,22 @@ fn rename_linked_sidecar_family(
     for entry in entries {
         let entry = entry.map_err(|err| format!("read_dir entry failure ({err})"))?;
         let source_path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("read_dir file type failure ({err})"))?;
 
         if source_path == source_media_path {
             continue;
         }
 
-        if source_path.is_dir() {
+        if file_type.is_symlink() {
+            return Err(format!(
+                "linked sidecar entry is symlink and cannot be renamed safely ({})",
+                source_path.display()
+            ));
+        }
+
+        if file_type.is_dir() {
             let Some(dir_name) = source_path.file_name().and_then(|v| v.to_str()) else {
                 continue;
             };
@@ -2786,7 +2892,7 @@ fn rename_linked_sidecar_family(
             continue;
         }
 
-        if !source_path.is_file() {
+        if !file_type.is_file() {
             continue;
         }
 
@@ -2819,6 +2925,8 @@ fn rename_linked_sidecar_family(
             )
         })?;
     }
+
+    rename_pairs.sort_by(|(left_source, _), (right_source, _)| left_source.cmp(right_source));
 
     let mut completed_pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
     for (source_path, target_path) in rename_pairs {
@@ -4338,19 +4446,29 @@ struct BulkRollbackResponse {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use std::fs;
     use std::path::PathBuf;
 
     use axum::http::StatusCode;
+    use rusqlite::Connection;
+
+    use crate::audit_store::AuditStore;
+    use crate::config::{BrandingConfig, BrandingThemeTokens};
+    use crate::jobs_store::JobsStore;
+    use crate::operations::OperationLog;
+    use crate::toolchain::{ProbeStatus, ResolvedBinary, ToolchainSnapshot};
 
     use super::{
-        BulkItemInput, DEFAULT_LIBRARY_LIMIT, DEFAULT_RECENT_LIMIT, MAX_LIBRARY_LIMIT,
-        MAX_RECENT_LIMIT, MetadataOverrideInput, SemanticDuplicateItem, build_duplicate_groups,
-        compute_nfo_target, compute_rename_target, duplicate_key_for_media_path,
-        ensure_media_file_path_allowed, extract_episode_signature_from_media_path,
-        infer_metadata_candidate, normalize_bulk_action, normalize_duplicate_key,
-        normalize_filename_stem, normalize_job_status_filter, normalize_library_limit,
-        normalize_recent_limit, partition_semantic_group_items, rename_linked_sidecar_family,
+        AppState, BulkApplyRequest, BulkDryRunRequest, BulkItemInput, DEFAULT_LIBRARY_LIMIT,
+        DEFAULT_RECENT_LIMIT, MAX_LIBRARY_LIMIT, MAX_RECENT_LIMIT, MetadataOverrideInput,
+        SemanticDuplicateItem, build_duplicate_groups, compute_nfo_target, compute_rename_target,
+        duplicate_key_for_media_path, ensure_media_file_path_allowed, execute_bulk_apply,
+        execute_bulk_dry_run, extract_episode_signature_from_media_path, infer_metadata_candidate,
+        normalize_bulk_action, normalize_duplicate_key, normalize_filename_stem,
+        normalize_job_status_filter, normalize_library_limit, normalize_recent_limit,
+        partition_semantic_group_items, rename_linked_sidecar_family,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -4361,6 +4479,85 @@ mod tests {
             .unwrap_or(0);
         dir.push(format!("mm-routes-{name}-{nanos}"));
         dir
+    }
+
+    fn test_toolchain_snapshot() -> ToolchainSnapshot {
+        ToolchainSnapshot {
+            ffmpeg: ResolvedBinary {
+                command_name: "ffmpeg".to_string(),
+                path: "/bin/ffmpeg".to_string(),
+                version_output: Some("ok".to_string()),
+                status: ProbeStatus::Ok,
+            },
+            ffprobe: ResolvedBinary {
+                command_name: "ffprobe".to_string(),
+                path: "/bin/ffprobe".to_string(),
+                version_output: Some("ok".to_string()),
+                status: ProbeStatus::Ok,
+            },
+            mediainfo: None,
+        }
+    }
+
+    fn create_minimal_tables(db_path: &PathBuf) {
+        let conn = Connection::open(db_path).expect("open sqlite db");
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS operation_events(\
+                id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                timestamp_ms INTEGER NOT NULL,\
+                kind TEXT NOT NULL,\
+                detail TEXT NOT NULL,\
+                success INTEGER NOT NULL\
+            )",
+            [],
+        )
+        .expect("create operation_events table");
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS jobs(\
+                id INTEGER PRIMARY KEY AUTOINCREMENT,\
+                kind TEXT NOT NULL,\
+                status TEXT NOT NULL,\
+                created_at_ms INTEGER NOT NULL,\
+                updated_at_ms INTEGER NOT NULL,\
+                payload_json TEXT NOT NULL,\
+                result_json TEXT,\
+                error TEXT\
+            )",
+            [],
+        )
+        .expect("create jobs table");
+    }
+
+    fn test_app_state(library_root: &PathBuf, state_dir: &PathBuf) -> Arc<AppState> {
+        fs::create_dir_all(state_dir).expect("create state dir");
+        let audit_db_path = state_dir.join("audit.sqlite3");
+        let jobs_db_path = state_dir.join("jobs.sqlite3");
+        create_minimal_tables(&audit_db_path);
+        create_minimal_tables(&jobs_db_path);
+
+        let audit_store = AuditStore::open(&audit_db_path).expect("open audit store");
+        let jobs_store = JobsStore::open(&jobs_db_path).expect("open jobs store");
+
+        Arc::new(AppState {
+            branding: BrandingConfig {
+                app_name: "Media Manager".to_string(),
+                short_name: "MM".to_string(),
+                logo_url: "/assets/logo.svg".to_string(),
+                browser_title_template: "{app_name}".to_string(),
+                theme_tokens: BrandingThemeTokens {
+                    accent: "#0f766e".to_string(),
+                    accent_contrast: "#f8fafc".to_string(),
+                },
+            },
+            toolchain: test_toolchain_snapshot(),
+            library_roots: vec![library_root.clone()],
+            state_dir: state_dir.clone(),
+            audit_db_path,
+            api_token: None,
+            operation_log: OperationLog::new(),
+            audit_store,
+            jobs_store,
+        })
     }
 
     #[test]
@@ -4596,6 +4793,275 @@ mod tests {
             target.file_name().and_then(|v| v.to_str()),
             Some("Movie Name - Part-2 (2024).mkv")
         );
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_truncates_long_title_to_fit_component_limit() {
+        let root = unique_temp_dir("rename-long-title");
+        fs::create_dir_all(&root).expect("create root");
+        let media_path = root.join("Some.Movie.File.mkv");
+        fs::write(&media_path, b"x").expect("write media");
+
+        let unique_token = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+        let long_title = format!("Unique{unique_token}{}", "A".repeat(320));
+        let override_data = MetadataOverrideInput {
+            title: Some(long_title),
+            year: Some(2024),
+            provider_id: None,
+            confidence: None,
+        };
+
+        let (target, note) =
+            compute_rename_target(&media_path, Some(&override_data)).expect("rename target");
+        let file_name = target
+            .file_name()
+            .and_then(|v| v.to_str())
+            .expect("target file name");
+
+        assert!(file_name.ends_with(".mkv"));
+        assert!(file_name.as_bytes().len() <= super::MAX_PATH_COMPONENT_BYTES);
+        assert!(note.contains("truncated to fit filesystem limits"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_sidecar_family_rejects_symlink_entries() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("rename-linked-symlink");
+        fs::create_dir_all(&root).expect("create root");
+
+        let source_media = root.join("Old Name.mkv");
+        let target_media = root.join("New Name (2024).mkv");
+        let external = root.join("external.nfo");
+        let symlink_path = root.join("Old Name.nfo");
+
+        fs::write(&source_media, b"x").expect("write source media");
+        fs::write(&external, b"external").expect("write external file");
+        symlink(&external, &symlink_path).expect("create symlink");
+
+        let err = rename_linked_sidecar_family(&source_media, &target_media)
+            .expect_err("symlink entries should fail");
+        assert!(err.contains("symlink"));
+        assert!(symlink_path.exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_reports_explicit_collision_when_truncated_target_exists() {
+        let root = unique_temp_dir("rename-truncation-collision");
+        fs::create_dir_all(&root).expect("create root");
+        let media_path = root.join("Some.Movie.File.mkv");
+        fs::write(&media_path, b"x").expect("write media");
+
+        let unique_token = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos().to_string())
+            .unwrap_or_else(|_| "0".to_string());
+        let long_title = format!("Unique{unique_token}{}", "A".repeat(320));
+        let override_data = MetadataOverrideInput {
+            title: Some(long_title),
+            year: Some(2024),
+            provider_id: None,
+            confidence: None,
+        };
+
+        let (first_target, _) =
+            compute_rename_target(&media_path, Some(&override_data)).expect("first rename target");
+        if let Some(parent) = first_target.parent() {
+            fs::create_dir_all(parent).expect("create first target parent");
+        }
+        fs::write(&first_target, b"occupied").expect("occupy first target");
+
+        let err = compute_rename_target(&media_path, Some(&override_data))
+            .expect_err("truncated collision should return explicit conflict");
+        assert!(err.contains("rename collision after truncation"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn bulk_apply_rename_fails_when_source_disappears_after_preview() {
+        let root = unique_temp_dir("bulk-apply-race-source");
+        fs::create_dir_all(&root).expect("create root");
+        let state_dir = root.join("state");
+        let state = test_app_state(&root, &state_dir);
+
+        let media_path = root.join("Old Name.mkv");
+        fs::write(&media_path, b"x").expect("write media");
+
+        let item = BulkItemInput {
+            media_path: media_path.display().to_string(),
+            item_uid: None,
+            metadata_override: Some(MetadataOverrideInput {
+                title: Some("New Name".to_string()),
+                year: Some(2024),
+                provider_id: None,
+                confidence: None,
+            }),
+        };
+        let apply_item = BulkItemInput {
+            media_path: media_path.display().to_string(),
+            item_uid: None,
+            metadata_override: Some(MetadataOverrideInput {
+                title: Some("New Name".to_string()),
+                year: Some(2024),
+                provider_id: None,
+                confidence: None,
+            }),
+        };
+
+        let dry_run_request = BulkDryRunRequest {
+            action: "rename".to_string(),
+            items: vec![item],
+        };
+        let dry_run = execute_bulk_dry_run(&state, &dry_run_request).expect("dry run rename");
+
+        fs::remove_file(&media_path).expect("delete source media");
+
+        let apply_request = BulkApplyRequest {
+            action: "rename".to_string(),
+            approved_batch_hash: dry_run.batch_hash,
+            items: vec![apply_item],
+        };
+
+        let err = execute_bulk_apply(&state, &apply_request)
+            .expect_err("apply should reject stale dry-run hash");
+        assert_eq!(err.0, StatusCode::CONFLICT);
+        assert!(err.1.contains("approved_batch_hash"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn bulk_apply_rename_fails_when_target_appears_after_preview() {
+        let root = unique_temp_dir("bulk-apply-race-target");
+        fs::create_dir_all(&root).expect("create root");
+        let state_dir = root.join("state");
+        let state = test_app_state(&root, &state_dir);
+
+        let media_path = root.join("Old Name.mkv");
+        fs::write(&media_path, b"x").expect("write media");
+
+        let item = BulkItemInput {
+            media_path: media_path.display().to_string(),
+            item_uid: None,
+            metadata_override: Some(MetadataOverrideInput {
+                title: Some("New Name".to_string()),
+                year: Some(2024),
+                provider_id: None,
+                confidence: None,
+            }),
+        };
+        let apply_item = BulkItemInput {
+            media_path: media_path.display().to_string(),
+            item_uid: None,
+            metadata_override: Some(MetadataOverrideInput {
+                title: Some("New Name".to_string()),
+                year: Some(2024),
+                provider_id: None,
+                confidence: None,
+            }),
+        };
+
+        let dry_run_request = BulkDryRunRequest {
+            action: "rename".to_string(),
+            items: vec![item],
+        };
+        let dry_run = execute_bulk_dry_run(&state, &dry_run_request).expect("dry run rename");
+        let target_path = PathBuf::from(
+            dry_run
+                .items
+                .first()
+                .and_then(|v| v.proposed_media_path.as_ref())
+                .expect("dry run target path"),
+        );
+        fs::write(&target_path, b"conflict").expect("create target conflict");
+
+        let apply_request = BulkApplyRequest {
+            action: "rename".to_string(),
+            approved_batch_hash: dry_run.batch_hash,
+            items: vec![apply_item],
+        };
+
+        let err = execute_bulk_apply(&state, &apply_request)
+            .expect_err("apply should reject stale dry-run hash");
+        assert_eq!(err.0, StatusCode::CONFLICT);
+        assert!(err.1.contains("approved_batch_hash"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bulk_apply_rolls_back_media_when_sidecar_update_fails() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("bulk-apply-sidecar-rollback");
+        fs::create_dir_all(&root).expect("create root");
+        let state_dir = root.join("state");
+        let state = test_app_state(&root, &state_dir);
+
+        let source_media = root.join("Old Name.mkv");
+        let source_sidecar = root.join("Old Name.nfo");
+        let external = root.join("external.nfo");
+        fs::write(&source_media, b"x").expect("write media");
+        fs::write(&external, b"external").expect("write external");
+        symlink(&external, &source_sidecar).expect("create symlinked sidecar");
+
+        let item = BulkItemInput {
+            media_path: source_media.display().to_string(),
+            item_uid: None,
+            metadata_override: Some(MetadataOverrideInput {
+                title: Some("New Name".to_string()),
+                year: Some(2024),
+                provider_id: None,
+                confidence: None,
+            }),
+        };
+        let apply_item = BulkItemInput {
+            media_path: source_media.display().to_string(),
+            item_uid: None,
+            metadata_override: Some(MetadataOverrideInput {
+                title: Some("New Name".to_string()),
+                year: Some(2024),
+                provider_id: None,
+                confidence: None,
+            }),
+        };
+
+        let dry_run_request = BulkDryRunRequest {
+            action: "rename".to_string(),
+            items: vec![item],
+        };
+        let dry_run = execute_bulk_dry_run(&state, &dry_run_request).expect("dry run rename");
+
+        let apply_request = BulkApplyRequest {
+            action: "rename".to_string(),
+            approved_batch_hash: dry_run.batch_hash,
+            items: vec![apply_item],
+        };
+        let apply = execute_bulk_apply(&state, &apply_request).expect("apply response");
+        let target_media = root.join("New Name (2024).mkv");
+
+        assert_eq!(apply.failed, 1);
+        let result = apply.items.first().expect("single apply result");
+        assert!(!result.success);
+        assert!(result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("rename sidecar update failed"));
+        assert!(source_media.exists());
+        assert!(!target_media.exists());
 
         fs::remove_dir_all(root).expect("cleanup");
     }
