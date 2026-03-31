@@ -234,7 +234,7 @@
 		<p class="eyebrow">Stage 3</p>
 		<h1>Formatting</h1>
 		<p class="lead">Review deterministic rename candidates generated from the indexed library snapshot before applying formatting operations.</p>
-		<p class="mono policy">Default rename policy: <strong>Movie Name (Year)</strong>. Matching sidecar `.nfo` files remain aligned automatically.</p>
+		<p class="mono policy">Default rename policy: <strong>Movie Name - Subtitle (Year)</strong>. Spaces are preserved; only invalid filename characters are replaced with <code>-</code>. Matching sidecar `.nfo` files remain aligned automatically.</p>
 	</section>
 
 	<section class="card">

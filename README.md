@@ -13,7 +13,7 @@ Rust backend + SvelteKit frontend service for Jellyfin-oriented media management
 - Stage-based media workflow:
   - Consolidation: index library, detect exact/semantic duplicates, merge IDs, quarantine duplicates
   - Metadata: apply metadata/provider IDs from NFO-first inference
-  - Formatting: rename media files to `Movie Name (Year)` defaults
+  - Formatting: rename media files to `Movie Name - Subtitle (Year)` defaults
   - Verify: queue-first audit and rollback confirmation stage
   - Centralized rollback controls in `/operations` with job-derived rollback IDs
   - In-page rollback controls for recent bulk/stage operations

@@ -41,7 +41,7 @@ export const WORKFLOW_STAGES: WorkflowStageDescriptor[] = [
 		key: 'formatting',
 		label: 'Formatting',
 		path: '/formatting',
-		description: 'Movie Name (Year) rename'
+		description: 'Movie Name - Subtitle (Year) rename'
 	},
 	{
 		id: 4,

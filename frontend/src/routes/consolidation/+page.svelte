@@ -740,7 +740,7 @@
 		<p class="mono">Use "Show Planned Result" to preview canonical UID and rename targets before merge.</p>
 		<p class="mono merge-policy">
 			Merge policy: canonical naming is mandatory. All matched items are normalized to
-			<code>Movie Title (Year)</code> with invalid characters replaced by <code>-</code>, and linked stem-matching
+			<code>Movie Name - Subtitle (Year)</code> with spaces preserved and invalid characters replaced by <code>-</code>, and linked stem-matching
 			metadata assets are renamed with the media file.
 		</p>
 		<div class="actions">

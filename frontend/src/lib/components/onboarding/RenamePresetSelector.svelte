@@ -14,8 +14,8 @@
 	<label class="preset selected">
 		<input type="radio" name="rename-preset" value="movie_year" bind:group={value} />
 		<div>
-			<strong>Movie Name (Year)</strong>
-			<p>Example: <span class="mono">The Matrix (1999).mkv</span></p>
+			<strong>Movie Name - Subtitle (Year)</strong>
+			<p>Example: <span class="mono">Blade Runner - Final Cut (1982).mkv</span></p>
 			<p class="note">Keeps directories stable and portable without app-specific metadata dependencies.</p>
 		</div>
 	</label>

@@ -43,7 +43,7 @@
 			</article>
 			<article>
 				<p class="label mono">Rename Pattern</p>
-				<label><input type="radio" checked disabled /> Movie Title (Year)</label>
+				<label><input type="radio" checked disabled /> Movie Name - Subtitle (Year)</label>
 				<p class="muted">Canonical naming is mandatory for semantic-merge normalization.</p>
 			</article>
 		</div>

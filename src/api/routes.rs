@@ -2591,7 +2591,10 @@ fn compute_rename_target(
 
     let target = target_parent.join(format!("{normalized}{extension}"));
     if target == media_path {
-        return Ok((target, "already matches title/year format".to_string()));
+        return Ok((
+            target,
+            "already matches Movie Name - Subtitle (Year) format".to_string(),
+        ));
     }
 
     if target.exists() {
@@ -2601,7 +2604,10 @@ fn compute_rename_target(
         ));
     }
 
-    Ok((target, "will rename to title/year format".to_string()))
+    Ok((
+        target,
+        "will rename to Movie Name - Subtitle (Year) format".to_string(),
+    ))
 }
 
 fn sanitize_display_filename_component(value: &str) -> String {
@@ -4434,7 +4440,10 @@ mod tests {
             target.file_name().and_then(|v| v.to_str()),
             Some("My Movie (2024).mkv")
         );
-        assert_eq!(note, "will rename to title/year format");
+        assert_eq!(
+            note,
+            "will rename to Movie Name - Subtitle (Year) format"
+        );
 
         fs::remove_dir_all(root).expect("cleanup");
     }
