@@ -2563,9 +2563,10 @@ fn compute_rename_target(
         .ok_or_else(|| "cannot determine media file stem".to_string())?;
 
     let inferred = infer_metadata_candidate(media_path, file_stem, metadata_override);
-    let normalized_title = normalize_filename_stem(&inferred.title);
-    let sanitized_title = sanitize_filename_component(&normalized_title);
-    let fallback_title = sanitize_filename_component(&normalize_filename_stem(file_stem));
+    let normalized_title = normalize_title_for_display_name(&inferred.title);
+    let sanitized_title = sanitize_display_filename_component(&normalized_title);
+    let fallback_title =
+        sanitize_display_filename_component(&normalize_title_for_display_name(file_stem));
     let final_title = if sanitized_title.is_empty() {
         fallback_title
     } else {
@@ -2603,9 +2604,10 @@ fn compute_rename_target(
     Ok((target, "will rename to title/year format".to_string()))
 }
 
-fn sanitize_filename_component(value: &str) -> String {
+fn sanitize_display_filename_component(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
-    let mut previous_was_separator = false;
+    let mut previous_was_space = false;
+    let mut previous_was_dash = false;
 
     for ch in value.chars() {
         let mapped = if matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
@@ -2614,18 +2616,60 @@ fn sanitize_filename_component(value: &str) -> String {
             ch
         };
 
-        if mapped.is_whitespace() || mapped == '-' {
-            if !previous_was_separator {
+        if mapped.is_whitespace() {
+            if !previous_was_space {
+                output.push(' ');
+            }
+            previous_was_space = true;
+            previous_was_dash = false;
+        } else if mapped == '-' {
+            if !previous_was_dash {
                 output.push('-');
             }
-            previous_was_separator = true;
+            previous_was_space = false;
+            previous_was_dash = true;
         } else {
             output.push(mapped);
-            previous_was_separator = false;
+            previous_was_space = false;
+            previous_was_dash = false;
         }
     }
 
-    output.trim_matches('-').to_string()
+    output.trim_matches(|ch: char| ch.is_whitespace() || ch == '-').to_string()
+}
+
+fn normalize_title_for_display_name(value: &str) -> String {
+    let mut normalized = value
+        .replace(['.', '_'], " ")
+        .replace(':', " - ");
+
+    // Normalize existing separators to a single spaced dash for subtitle-like titles.
+    normalized = normalized
+        .replace(" - ", " __MM_DASH_SEP__ ")
+        .replace('-', " ")
+        .replace("__MM_DASH_SEP__", "-");
+
+    let mut output = String::with_capacity(normalized.len());
+    let mut previous_was_space = false;
+    for ch in normalized.chars() {
+        if ch.is_whitespace() {
+            if !previous_was_space {
+                output.push(' ');
+            }
+            previous_was_space = true;
+        } else {
+            output.push(ch);
+            previous_was_space = false;
+        }
+    }
+
+    let compact = output.trim();
+    compact
+        .split('-')
+        .map(|part| part.trim())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" - ")
 }
 
 fn should_move_into_canonical_folder(parent: &std::path::Path, file_stem: &str) -> bool {
@@ -4383,12 +4427,12 @@ mod tests {
                 .parent()
                 .and_then(|v| v.file_name())
                 .and_then(|v| v.to_str()),
-            Some("My-Movie (2024)")
+            Some("My Movie (2024)")
         );
         assert_eq!(target.extension().and_then(|v| v.to_str()), Some("mkv"));
         assert_eq!(
             target.file_name().and_then(|v| v.to_str()),
-            Some("My-Movie (2024).mkv")
+            Some("My Movie (2024).mkv")
         );
         assert_eq!(note, "will rename to title/year format");
 
@@ -4411,7 +4455,7 @@ mod tests {
             compute_rename_target(&media_path, None).expect("rename target computed");
         assert_eq!(
             target.file_name().and_then(|v| v.to_str()),
-            Some("Actual-Movie-Name (2022).mkv")
+            Some("Actual Movie Name (2022).mkv")
         );
 
         fs::remove_dir_all(root).expect("cleanup");
@@ -4498,7 +4542,7 @@ mod tests {
     }
 
     #[test]
-    fn rename_target_replaces_invalid_characters_with_dash() {
+    fn rename_target_formats_subtitle_with_spaced_dash() {
         let root = unique_temp_dir("rename-invalid-char");
         fs::create_dir_all(&root).expect("create root");
         let movie_dir = root.join("Movie Title (2024)");
@@ -4517,7 +4561,31 @@ mod tests {
             compute_rename_target(&media_path, Some(&override_data)).expect("rename target");
         assert_eq!(
             target.file_name().and_then(|v| v.to_str()),
-            Some("Movie-Title (2024).mkv")
+            Some("Movie - Title (2024).mkv")
+        );
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_preserves_spaces_and_only_uses_dash_for_invalid_chars() {
+        let root = unique_temp_dir("rename-space-preserve");
+        fs::create_dir_all(&root).expect("create root");
+        let media_path = root.join("Some.Movie.File.mkv");
+        fs::write(&media_path, b"x").expect("write media");
+
+        let override_data = MetadataOverrideInput {
+            title: Some("Movie Name: Part/2".to_string()),
+            year: Some(2024),
+            provider_id: None,
+            confidence: None,
+        };
+
+        let (target, _note) =
+            compute_rename_target(&media_path, Some(&override_data)).expect("rename target");
+        assert_eq!(
+            target.file_name().and_then(|v| v.to_str()),
+            Some("Movie Name - Part-2 (2024).mkv")
         );
 
         fs::remove_dir_all(root).expect("cleanup");
