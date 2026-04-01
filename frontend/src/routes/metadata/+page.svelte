@@ -5,6 +5,8 @@
 	import SectionHeader from '$lib/components/ui/SectionHeader.svelte';
 	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import { markStageComplete, markStageIncomplete } from '$lib/workflow/progress';
+	import { apiFetch } from '$lib/utils/api';
+	import type { BulkDryRunResponse, BulkApplyResponse, BulkRollbackResponse } from '$lib/types/api';
 
 	type IndexedMediaItem = {
 		media_path: string;
@@ -20,38 +22,6 @@
 	};
 
 	type BulkAction = 'metadata_lookup';
-
-	type BulkDryRunResponse = {
-		action: BulkAction;
-		batch_hash: string;
-		total_items: number;
-		plan_ready: boolean;
-		summary: {
-			creates: number;
-			updates: number;
-			noops: number;
-			invalid: number;
-		};
-	};
-
-	type BulkApplyResponse = {
-		action: BulkAction;
-		total_items: number;
-		succeeded: number;
-		failed: number;
-		items: {
-			media_path: string;
-			success: boolean;
-			operation_id: string | null;
-			error: string | null;
-		}[];
-	};
-
-	type BulkRollbackResponse = {
-		total_items: number;
-		succeeded: number;
-		failed: number;
-	};
 
 	let loading = $state(false);
 	let error = $state('');
@@ -258,18 +228,6 @@
 		await refresh();
 	}
 
-	async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-		const headers = new Headers(init?.headers ?? {});
-		const token = localStorage.getItem('mm-api-token');
-		if (token && token.trim().length > 0) {
-			headers.set('Authorization', `Bearer ${token.trim()}`);
-		}
-
-		return fetch(input, {
-			...init,
-			headers
-		});
-	}
 </script>
 
 <svelte:head>

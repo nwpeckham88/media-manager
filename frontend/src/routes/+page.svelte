@@ -13,40 +13,19 @@
 		type WorkflowProgress as WorkflowProgressState
 	} from '$lib/workflow/progress';
 	import { appSettings, type DashboardRefreshPolicy } from '$lib/workflow/settings';
-
-	type JobRecord = {
-		id: number;
-		kind: string;
-		status: 'running' | 'succeeded' | 'failed' | 'canceled';
-		error: string | null;
-	};
-
-	type ApiState<T> = {
-		ok: boolean;
-		data?: T;
-		error?: string;
-	};
+	import type {
+		JobRecord,
+		ApiState,
+		DuplicateGroupsSummary,
+		IndexItemsSummary,
+		FormattingCandidatesSummary,
+		RecentJobsResponse
+	} from '$lib/types/api';
 
 	type IndexStats = {
 		total_indexed: number;
 		hashed: number;
 		probed: number;
-	};
-
-	type DuplicateGroupsSummary = {
-		total_groups: number;
-	};
-
-	type IndexItemsSummary = {
-		total_items: number;
-	};
-
-	type FormattingCandidatesSummary = {
-		total_items: number;
-	};
-
-	type RecentJobsResponse = {
-		items: JobRecord[];
 	};
 
 	let { data } = $props<{

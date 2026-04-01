@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store';
 import type { HashingMode, RenamePreset } from '$lib/workflow/onboarding';
+import { isBrowser } from '$lib/utils/browser';
 
 export type DashboardRefreshPolicy = 'running-jobs-only' | 'always' | 'manual';
 
@@ -16,10 +17,6 @@ const DEFAULT_SETTINGS: AppSettings = {
 	renamePreset: 'movie_year',
 	dashboardRefreshPolicy: 'running-jobs-only'
 };
-
-function isBrowser(): boolean {
-	return typeof window !== 'undefined';
-}
 
 function normalizeSettings(value: unknown): AppSettings {
 	if (!value || typeof value !== 'object') {

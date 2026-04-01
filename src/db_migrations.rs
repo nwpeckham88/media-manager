@@ -4,7 +4,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::Connection;
 use thiserror::Error;
 
-pub const LATEST_SCHEMA_VERSION: i64 = 2;
+#[cfg(test)]
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Error)]
 pub enum DbMigrationError {

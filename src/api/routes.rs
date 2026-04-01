@@ -1,5 +1,5 @@
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -181,13 +181,13 @@ async fn library_items(
 ) -> Result<Json<LibraryBrowseResult>, (StatusCode, String)> {
     let root_index = query.root_index;
     let search_query = query.q.clone();
-    if let Some(idx) = root_index {
-        if idx >= state.library_roots.len() {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("root_index {idx} is out of bounds"),
-            ));
-        }
+    if let Some(idx) = root_index
+        && idx >= state.library_roots.len()
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("root_index {idx} is out of bounds"),
+        ));
     }
 
     let job_id = create_job(
@@ -414,10 +414,10 @@ async fn index_items(
         items.push(row.map_err(internal_error)?);
     }
 
-    if let Some(only_missing_provider) = query.only_missing_provider {
-        if only_missing_provider {
-            items.retain(|item| item.parsed_provider_id.is_none());
-        }
+    if let Some(only_missing_provider) = query.only_missing_provider
+        && only_missing_provider
+    {
+        items.retain(|item| item.parsed_provider_id.is_none());
     }
 
     if let Some(min_confidence) = query.min_confidence {
@@ -487,14 +487,14 @@ async fn formatting_candidates(
         if !media_path.exists() {
             continue;
         }
-        if let Ok((target, note)) = compute_rename_target(&media_path, None, false) {
-            if target != media_path {
-                candidates.push(FormattingCandidateItem {
-                    media_path: media_path.display().to_string(),
-                    proposed_media_path: target.display().to_string(),
-                    note,
-                });
-            }
+        if let Ok((target, note)) = compute_rename_target(&media_path, None, false)
+            && target != media_path
+        {
+            candidates.push(FormattingCandidateItem {
+                media_path: media_path.display().to_string(),
+                proposed_media_path: target.display().to_string(),
+                note,
+            });
         }
     }
 
@@ -708,9 +708,7 @@ async fn consolidation_quarantine(
     }
 
     let keep_path = PathBuf::from(&request.keep_media_path);
-    if let Err(err) = ensure_media_file_path_allowed(&keep_path, &state.library_roots) {
-        return Err(err);
-    }
+    ensure_media_file_path_allowed(&keep_path, &state.library_roots)?;
 
     let set: std::collections::HashSet<&str> =
         request.media_paths.iter().map(String::as_str).collect();
@@ -835,7 +833,7 @@ async fn consolidation_quarantine(
 }
 
 fn run_library_index_job(
-    db_path: &PathBuf,
+    db_path: &Path,
     roots: &[PathBuf],
     ffprobe_path: &str,
     job_id: i64,
@@ -1008,7 +1006,7 @@ struct ProbeSummary {
     height: Option<i64>,
 }
 
-fn run_ffprobe_summary(ffprobe_path: &str, media_path: &PathBuf) -> Result<ProbeSummary, String> {
+fn run_ffprobe_summary(ffprobe_path: &str, media_path: &Path) -> Result<ProbeSummary, String> {
     let output = Command::new(ffprobe_path)
         .arg("-v")
         .arg("error")
@@ -1073,7 +1071,7 @@ fn run_ffprobe_summary(ffprobe_path: &str, media_path: &PathBuf) -> Result<Probe
     })
 }
 
-fn hash_file_sha256(path: &PathBuf) -> Result<String, String> {
+fn hash_file_sha256(path: &Path) -> Result<String, String> {
     let file = fs::File::open(path).map_err(|e| format!("open hash input failed: {e}"))?;
     let mut reader = std::io::BufReader::new(file);
     let mut hasher = Sha256::new();
@@ -1094,7 +1092,7 @@ fn hash_file_sha256(path: &PathBuf) -> Result<String, String> {
 }
 
 fn complete_job_direct(
-    db_path: &PathBuf,
+    db_path: &Path,
     job_id: i64,
     status: JobStatus,
     result_json: Option<String>,
@@ -1144,16 +1142,10 @@ async fn recent_jobs(
         .map(|v| v.trim())
         .filter(|v| !v.is_empty());
     let bulk_only = query.bulk_only.unwrap_or(false);
-    let items = match state.jobs_store.recent_jobs_filtered(
-        status.as_deref(),
-        kind,
-        bulk_only,
-        offset,
-        limit,
-    ) {
-        Ok(jobs) => jobs,
-        Err(_) => Vec::new(),
-    };
+    let items = state
+        .jobs_store
+        .recent_jobs_filtered(status.as_deref(), kind, bulk_only, offset, limit)
+        .unwrap_or_default();
 
     let total_count = state
         .jobs_store
@@ -1921,7 +1913,8 @@ fn execute_bulk_apply(
             let source_path = PathBuf::from(&item.media_path);
             let target_path = PathBuf::from(&target_path_value);
 
-            if let Err((_, err)) = ensure_media_file_path_allowed(&source_path, &state.library_roots)
+            if let Err((_, err)) =
+                ensure_media_file_path_allowed(&source_path, &state.library_roots)
             {
                 applied_items.push(BulkApplyItemResult {
                     media_path: item.media_path,
@@ -2586,6 +2579,34 @@ fn compute_rename_target(
         .and_then(|v| v.to_str())
         .ok_or_else(|| "cannot determine media file stem".to_string())?;
 
+    if let Some(tv_stem_raw) = build_jellyfin_tv_episode_stem(media_path, metadata_override) {
+        let (tv_stem, was_truncated) =
+            build_rename_stem_with_limits(parent, false, &tv_stem_raw, None, &extension)?;
+        let target = parent.join(format!("{tv_stem}{extension}"));
+        if target == media_path {
+            return Ok((
+                target,
+                "already matches Jellyfin TV episode format".to_string(),
+            ));
+        }
+
+        if target.exists() {
+            return Err(format!(
+                "rename collision: target already exists ({})",
+                target.display()
+            ));
+        }
+
+        let note = if was_truncated {
+            "will rename to Jellyfin TV episode format (truncated to fit filesystem limits)"
+                .to_string()
+        } else {
+            "will rename to Jellyfin TV episode format".to_string()
+        };
+
+        return Ok((target, note));
+    }
+
     let inferred = infer_metadata_candidate(media_path, file_stem, metadata_override);
     let normalized_title = normalize_title_for_display_name(&inferred.title);
     let sanitized_title = sanitize_display_filename_component(&normalized_title);
@@ -2601,27 +2622,14 @@ fn compute_rename_target(
         return Err("rename target stem is empty after normalization".to_string());
     }
 
-    let (mut normalized, mut was_truncated) = build_rename_stem_with_limits(
-        parent,
-        false,
-        &final_title,
-        inferred.year,
-        &extension,
-    )?;
+    let (mut normalized, mut was_truncated) =
+        build_rename_stem_with_limits(parent, false, &final_title, inferred.year, &extension)?;
 
-    let should_move_parent = should_move_into_canonical_folder(
-        parent,
-        &normalized,
-        allow_multi_file_parent_rename,
-    );
+    let should_move_parent =
+        should_move_into_canonical_folder(parent, &normalized, allow_multi_file_parent_rename);
     if should_move_parent {
-        let (moved_normalized, moved_was_truncated) = build_rename_stem_with_limits(
-            parent,
-            true,
-            &final_title,
-            inferred.year,
-            &extension,
-        )?;
+        let (moved_normalized, moved_was_truncated) =
+            build_rename_stem_with_limits(parent, true, &final_title, inferred.year, &extension)?;
         normalized = moved_normalized;
         was_truncated = was_truncated || moved_was_truncated;
     }
@@ -2641,18 +2649,17 @@ fn compute_rename_target(
     }
 
     if target.exists() {
-        if should_move_parent {
-            if let Some((merge_target, merge_truncated)) =
+        if should_move_parent
+            && let Some((merge_target, merge_truncated)) =
                 build_merge_collision_target(&target_parent, &normalized, &extension)?
-            {
-                let merge_note = if merge_truncated {
-                    "target exists; will merge into canonical folder with deconflicted filename (truncated to fit filesystem limits)".to_string()
-                } else {
-                    "target exists; will merge into canonical folder with deconflicted filename"
-                        .to_string()
-                };
-                return Ok((merge_target, merge_note));
-            }
+        {
+            let merge_note = if merge_truncated {
+                "target exists; will merge into canonical folder with deconflicted filename (truncated to fit filesystem limits)".to_string()
+            } else {
+                "target exists; will merge into canonical folder with deconflicted filename"
+                    .to_string()
+            };
+            return Ok((merge_target, merge_note));
         }
 
         if was_truncated {
@@ -2731,9 +2738,7 @@ fn build_rename_stem_with_limits(
     year: Option<u16>,
     extension: &str,
 ) -> Result<(String, bool), String> {
-    let suffix = year
-        .map(|value| format!(" ({value})"))
-        .unwrap_or_default();
+    let suffix = year.map(|value| format!(" ({value})")).unwrap_or_default();
     let mut title_candidate = title.trim().to_string();
     if title_candidate.is_empty() {
         return Err("rename target stem is empty after normalization".to_string());
@@ -2761,20 +2766,19 @@ fn build_rename_stem_with_limits(
     Err("rename target exceeds filesystem limits and cannot be truncated safely".to_string())
 }
 
-
 fn rename_stem_fits_limits(
     source_parent: &std::path::Path,
     move_into_canonical_parent: bool,
     stem: &str,
     extension: &str,
 ) -> bool {
-    let stem_bytes = stem.as_bytes().len();
+    let stem_bytes = stem.len();
     if stem_bytes > MAX_PATH_COMPONENT_BYTES {
         return false;
     }
 
     let file_name = format!("{stem}{extension}");
-    if file_name.as_bytes().len() > MAX_PATH_COMPONENT_BYTES {
+    if file_name.len() > MAX_PATH_COMPONENT_BYTES {
         return false;
     }
 
@@ -2785,7 +2789,7 @@ fn rename_stem_fits_limits(
     };
 
     let target_path = target_parent.join(&file_name);
-    target_path.to_string_lossy().as_bytes().len() <= MAX_PATH_BYTES
+    target_path.to_string_lossy().len() <= MAX_PATH_BYTES
 }
 
 fn sanitize_display_filename_component(value: &str) -> String {
@@ -2819,13 +2823,220 @@ fn sanitize_display_filename_component(value: &str) -> String {
         }
     }
 
-    output.trim_matches(|ch: char| ch.is_whitespace() || ch == '-').to_string()
+    output
+        .trim_matches(|ch: char| ch.is_whitespace() || ch == '-')
+        .to_string()
+}
+
+fn build_jellyfin_tv_episode_stem(
+    media_path: &std::path::Path,
+    metadata_override: Option<&MetadataOverrideInput>,
+) -> Option<String> {
+    let file_stem = media_path.file_stem().and_then(|v| v.to_str())?;
+    let normalized_stem = normalize_title_for_display_name(file_stem);
+    let (season, episode, token_start, token_end) = find_season_episode_token(&normalized_stem)?;
+
+    let show_from_stem = normalized_stem
+        .get(0..token_start)
+        .unwrap_or_default()
+        .trim_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == '_' || ch == '.');
+    let show_candidate = if show_from_stem.is_empty() {
+        infer_series_title_from_media_path(media_path).unwrap_or_default()
+    } else {
+        show_from_stem.to_string()
+    };
+
+    let show_title = sanitize_display_filename_component(&normalize_title_for_display_name(
+        &strip_trailing_bracketed_metadata(&show_candidate),
+    ));
+    if show_title.is_empty() {
+        return None;
+    }
+
+    let episode_suffix = normalized_stem
+        .get(token_end..)
+        .unwrap_or_default()
+        .trim_start_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == '_' || ch == '.');
+    let mut episode_title = sanitize_display_filename_component(&normalize_title_for_display_name(
+        &strip_release_suffix_tokens(episode_suffix),
+    ));
+
+    if episode_title.is_empty()
+        && let Some(override_title) =
+            metadata_override.and_then(|value| normalize_optional_string(&value.title))
+    {
+        episode_title = sanitize_display_filename_component(&normalize_title_for_display_name(
+            &strip_trailing_bracketed_metadata(&override_title),
+        ));
+    }
+
+    let mut stem = format!("{show_title} - S{season:02}E{episode:02}");
+    if !episode_title.is_empty() {
+        stem.push_str(" - ");
+        stem.push_str(&episode_title);
+    }
+    Some(stem)
+}
+
+fn find_season_episode_token(value: &str) -> Option<(u16, u16, usize, usize)> {
+    let upper = value.to_ascii_uppercase();
+    let bytes = upper.as_bytes();
+
+    let mut i = 0_usize;
+    while i < bytes.len() {
+        if bytes[i] != b'S' {
+            i += 1;
+            continue;
+        }
+        if i > 0 && !is_episode_token_boundary(bytes[i - 1]) {
+            i += 1;
+            continue;
+        }
+
+        let mut j = i + 1;
+        let season_start = j;
+        while j < bytes.len() && bytes[j].is_ascii_digit() && j.saturating_sub(season_start) < 4 {
+            j += 1;
+        }
+        let season_len = j.saturating_sub(season_start);
+        if season_len == 0 || j >= bytes.len() || bytes[j] != b'E' {
+            i += 1;
+            continue;
+        }
+
+        j += 1;
+        let episode_start = j;
+        while j < bytes.len() && bytes[j].is_ascii_digit() && j.saturating_sub(episode_start) < 3 {
+            j += 1;
+        }
+        let episode_len = j.saturating_sub(episode_start);
+        if episode_len == 0 {
+            i += 1;
+            continue;
+        }
+        if j < bytes.len() && !is_episode_token_boundary(bytes[j]) {
+            i += 1;
+            continue;
+        }
+
+        let season = upper
+            .get(season_start..season_start + season_len)
+            .and_then(|v| v.parse::<u16>().ok())?;
+        let episode = upper
+            .get(episode_start..episode_start + episode_len)
+            .and_then(|v| v.parse::<u16>().ok())?;
+
+        return Some((season, episode, i, j));
+    }
+
+    None
+}
+
+fn is_episode_token_boundary(ch: u8) -> bool {
+    ch.is_ascii_whitespace() || matches!(ch, b'.' | b'_' | b'-' | b'[' | b']' | b'(' | b')')
+}
+
+fn infer_series_title_from_media_path(media_path: &std::path::Path) -> Option<String> {
+    let parent = media_path.parent()?;
+    let parent_name = parent.file_name().and_then(|v| v.to_str())?;
+
+    if is_likely_season_folder(parent_name) {
+        return parent
+            .parent()
+            .and_then(|v| v.file_name())
+            .and_then(|v| v.to_str())
+            .map(ToString::to_string);
+    }
+
+    Some(parent_name.to_string())
+}
+
+fn is_likely_season_folder(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized == "specials" {
+        return true;
+    }
+
+    if let Some(rest) = normalized.strip_prefix("season") {
+        return rest
+            .trim()
+            .chars()
+            .all(|ch| ch.is_ascii_digit() || ch == '-' || ch.is_whitespace());
+    }
+
+    if let Some(rest) = normalized.strip_prefix('s') {
+        return !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit());
+    }
+
+    false
+}
+
+fn strip_trailing_bracketed_metadata(value: &str) -> String {
+    let mut output = value.trim().to_string();
+
+    loop {
+        if !output.ends_with(']') {
+            break;
+        }
+
+        let Some(start) = output.rfind('[') else {
+            break;
+        };
+
+        output = output[..start]
+            .trim_end_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == '_')
+            .to_string();
+    }
+
+    output
+}
+
+fn strip_release_suffix_tokens(value: &str) -> String {
+    let mut output = strip_trailing_bracketed_metadata(value);
+    let mut removed_bracket_segment = false;
+
+    if let Some(index) = output.find('[') {
+        removed_bracket_segment = true;
+        output = output[..index]
+            .trim_end_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == '_')
+            .to_string();
+    }
+
+    if !removed_bracket_segment && let Some((prefix, suffix)) = output.rsplit_once('-') {
+        let candidate = suffix.trim();
+        if looks_like_release_group_tag(candidate) {
+            output = prefix
+                .trim_end_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == '_')
+                .to_string();
+        }
+    }
+
+    output
+}
+
+fn looks_like_release_group_tag(value: &str) -> bool {
+    if value.is_empty() || value.len() > 16 || value.contains(char::is_whitespace) {
+        return false;
+    }
+
+    let mut has_upper = false;
+    for ch in value.chars() {
+        if !(ch.is_ascii_alphanumeric() || ch == '.' || ch == '_' || ch == '-') {
+            return false;
+        }
+        if ch.is_ascii_lowercase() {
+            return false;
+        }
+        if ch.is_ascii_uppercase() {
+            has_upper = true;
+        }
+    }
+
+    has_upper
 }
 
 fn normalize_title_for_display_name(value: &str) -> String {
-    let mut normalized = value
-        .replace(['.', '_'], " ")
-        .replace(':', " - ");
+    let mut normalized = value.replace(['.', '_'], " ").replace(':', " - ");
 
     // Normalize existing separators to a single spaced dash for subtitle-like titles.
     normalized = normalized
@@ -2900,7 +3111,8 @@ fn should_move_into_canonical_folder(
     }
 
     // Skip moving when the parent already matches the canonical folder name.
-    let normalized_folder = sanitize_display_filename_component(&normalize_title_for_display_name(folder_name));
+    let normalized_folder =
+        sanitize_display_filename_component(&normalize_title_for_display_name(folder_name));
     let normalized_canonical =
         sanitize_display_filename_component(&normalize_title_for_display_name(canonical_stem));
 
@@ -3232,8 +3444,9 @@ fn normalize_duplicate_key(stem: &str) -> String {
 
     let tokens: Vec<&str> = normalized.split_whitespace().collect();
     let year = tokens.iter().find_map(|token| {
-        if token.len() == 4 {
-            token
+        let cleaned = token.trim_matches(|ch: char| matches!(ch, '[' | ']' | '(' | ')' | '{' | '}'));
+        if cleaned.len() == 4 {
+            cleaned
                 .parse::<u16>()
                 .ok()
                 .filter(|value| (1900..=2100).contains(value))
@@ -3244,17 +3457,21 @@ fn normalize_duplicate_key(stem: &str) -> String {
 
     let mut filtered = Vec::with_capacity(tokens.len());
     for token in tokens {
-        if noise.contains(&token) {
+        let cleaned = token
+            .trim_matches(|ch: char| matches!(ch, '[' | ']' | '(' | ')' | '{' | '}'));
+        if cleaned.is_empty() {
             continue;
         }
-        if token.len() == 4 {
-            if let Some(y) = year {
-                if token == y.to_string() {
-                    continue;
-                }
-            }
+        if noise.contains(&cleaned) {
+            continue;
         }
-        filtered.push(token);
+        if cleaned.len() == 4
+            && let Some(y) = year
+            && cleaned == y.to_string()
+        {
+            continue;
+        }
+        filtered.push(cleaned);
     }
 
     let title_key = if filtered.is_empty() {
@@ -3337,6 +3554,10 @@ fn extract_episode_signature_from_media_path(media_path: &str) -> Option<String>
             i += 1;
             continue;
         }
+        if j < chars.len() && !is_episode_token_boundary_for_partition(chars[j]) {
+            i += 1;
+            continue;
+        }
 
         let season_raw: String = chars[season_start..season_start + season_len]
             .iter()
@@ -3351,6 +3572,10 @@ fn extract_episode_signature_from_media_path(media_path: &str) -> Option<String>
     }
 
     None
+}
+
+fn is_episode_token_boundary_for_partition(ch: char) -> bool {
+    ch.is_ascii_whitespace() || matches!(ch, '.' | '_' | '-' | '[' | ']' | '(' | ')')
 }
 
 fn compute_nfo_target(media_path: &std::path::Path) -> Result<(PathBuf, String), String> {
@@ -3470,10 +3695,10 @@ fn infer_metadata_candidate(
     let mut filtered_tokens: Vec<String> = Vec::new();
     for token in tokens {
         let lowered = token.to_ascii_lowercase();
-        if let Some(y) = year {
-            if lowered == y.to_string() {
-                continue;
-            }
+        if let Some(y) = year
+            && lowered == y.to_string()
+        {
+            continue;
         }
         if noise.contains(&lowered.as_str()) {
             continue;
@@ -3626,10 +3851,10 @@ fn extract_nfo_provider_id(content: &str) -> Option<String> {
         }
     }
 
-    if let Some(tmdbid) = extract_xml_tag_value(content, "tmdbid") {
-        if tmdbid.chars().all(|ch| ch.is_ascii_digit()) {
-            return Some(format!("tmdb-{tmdbid}"));
-        }
+    if let Some(tmdbid) = extract_xml_tag_value(content, "tmdbid")
+        && tmdbid.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return Some(format!("tmdb-{tmdbid}"));
     }
 
     let lower = content.to_ascii_lowercase();
@@ -3750,10 +3975,11 @@ fn extract_provider_id(input: &str) -> (Option<String>, String) {
             if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
                 provider_id = Some(format!("tmdb-{rest}"));
             }
-        } else if let Some(rest) = compact.strip_prefix("tmdb-") {
-            if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
-                provider_id = Some(format!("tmdb-{rest}"));
-            }
+        } else if let Some(rest) = compact.strip_prefix("tmdb-")
+            && !rest.is_empty()
+            && rest.chars().all(|ch| ch.is_ascii_digit())
+        {
+            provider_id = Some(format!("tmdb-{rest}"));
         }
 
         if provider_id.is_some() {
@@ -3771,32 +3997,30 @@ fn extract_year(input: &str) -> (Option<u16>, String) {
     let mut year = None;
     let mut working = input.to_string();
 
-    if let Some(start) = working.rfind('(') {
-        if let Some(end_rel) = working[start + 1..].find(')') {
-            let end = start + 1 + end_rel;
-            let candidate = working[start + 1..end].trim();
-            if candidate.len() == 4 {
-                if let Ok(parsed) = candidate.parse::<u16>() {
-                    if (1900..=2100).contains(&parsed) {
-                        year = Some(parsed);
-                        working.replace_range(start..=end, "");
-                        return (year, normalize_filename_stem(&working));
-                    }
-                }
-            }
+    if let Some(start) = working.rfind('(')
+        && let Some(end_rel) = working[start + 1..].find(')')
+    {
+        let end = start + 1 + end_rel;
+        let candidate = working[start + 1..end].trim();
+        if candidate.len() == 4
+            && let Ok(parsed) = candidate.parse::<u16>()
+            && (1900..=2100).contains(&parsed)
+        {
+            year = Some(parsed);
+            working.replace_range(start..=end, "");
+            return (year, normalize_filename_stem(&working));
         }
     }
 
     for token in input.split_whitespace() {
-        if token.len() == 4 {
-            if let Ok(parsed) = token.parse::<u16>() {
-                if (1900..=2100).contains(&parsed) {
-                    year = Some(parsed);
-                    let marker = token.to_string();
-                    working = working.replace(&marker, " ");
-                    break;
-                }
-            }
+        if token.len() == 4
+            && let Ok(parsed) = token.parse::<u16>()
+            && (1900..=2100).contains(&parsed)
+        {
+            year = Some(parsed);
+            let marker = token.to_string();
+            working = working.replace(&marker, " ");
+            break;
         }
     }
 
@@ -4107,7 +4331,7 @@ fn normalize_job_status_filter(value: Option<&str>) -> Option<String> {
 }
 
 fn ensure_media_file_path_allowed(
-    media_path: &PathBuf,
+    media_path: &Path,
     library_roots: &[PathBuf],
 ) -> Result<(), (StatusCode, String)> {
     if library_roots.is_empty() {
@@ -4546,13 +4770,14 @@ mod tests {
 
     use super::{
         AppState, BulkApplyRequest, BulkDryRunRequest, BulkItemInput, DEFAULT_LIBRARY_LIMIT,
-        DEFAULT_RECENT_LIMIT, MAX_LIBRARY_LIMIT, MAX_RECENT_LIMIT, MetadataOverrideInput,
-        SemanticDuplicateItem, build_duplicate_groups, compute_nfo_target, compute_rename_target,
-        duplicate_key_for_media_path, ensure_media_file_path_allowed, execute_bulk_apply,
-        execute_bulk_dry_run, extract_episode_signature_from_media_path, infer_metadata_candidate,
-        normalize_bulk_action, normalize_duplicate_key, normalize_filename_stem,
-        normalize_job_status_filter, normalize_library_limit, normalize_recent_limit,
-        partition_semantic_group_items, rename_linked_sidecar_family,
+        DEFAULT_RECENT_LIMIT, MAX_LIBRARY_LIMIT, MAX_PATH_COMPONENT_BYTES, MAX_RECENT_LIMIT,
+        MetadataOverrideInput, SemanticDuplicateItem, build_duplicate_groups, compute_nfo_target,
+        compute_rename_target, duplicate_key_for_media_path, ensure_media_file_path_allowed,
+        execute_bulk_apply, execute_bulk_dry_run, extract_episode_signature_from_media_path,
+        find_season_episode_token, infer_metadata_candidate, normalize_bulk_action,
+        normalize_duplicate_key, normalize_filename_stem, normalize_job_status_filter,
+        normalize_library_limit, normalize_recent_limit, partition_semantic_group_items,
+        rename_linked_sidecar_family,
     };
 
     fn unique_temp_dir(name: &str) -> PathBuf {
@@ -4721,10 +4946,7 @@ mod tests {
             target.file_name().and_then(|v| v.to_str()),
             Some("My Movie (2024).mkv")
         );
-        assert_eq!(
-            note,
-            "will rename to Movie Name - Subtitle (Year) format"
-        );
+        assert_eq!(note, "will rename to Movie Name - Subtitle (Year) format");
 
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4755,8 +4977,7 @@ mod tests {
 
         assert_ne!(target_parent_name, "My.Movie.2024.1080p");
         assert_eq!(
-            target_parent_name,
-            target_file_stem,
+            target_parent_name, target_file_stem,
             "folder should be renamed to the same canonical stem as the media file"
         );
         assert_eq!(target.extension().and_then(|v| v.to_str()), Some("mkv"));
@@ -4810,8 +5031,7 @@ mod tests {
         fs::create_dir_all(&season_dir).expect("create season dir");
         fs::create_dir_all(&canonical_dir).expect("create canonical dir");
 
-        let source_media =
-            season_dir.join("Common Side Effects - S01E08 - Amelia and Wyatt [HDTV-1080p].mkv");
+        let source_media = season_dir.join("Amelia.and.Wyatt.2025.1080p.mkv");
         let occupied_target = canonical_dir.join("Amelia and Wyatt (2025).mkv");
         fs::write(&source_media, b"source").expect("write source media");
         fs::write(&occupied_target, b"existing").expect("write occupied target");
@@ -4828,12 +5048,141 @@ mod tests {
 
         assert_eq!(target.parent(), Some(canonical_dir.as_path()));
         assert_ne!(target, occupied_target);
-        assert!(target
+        assert!(
+            target
+                .file_name()
+                .and_then(|v| v.to_str())
+                .unwrap_or_default()
+                .contains(" - alt")
+        );
+        assert!(note.contains("merge into canonical folder"));
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_uses_jellyfin_episode_format_for_tv_paths() {
+        let root = unique_temp_dir("rename-target-tv-episode");
+        fs::create_dir_all(&root).expect("create root");
+
+        let show_dir = root.join("Common Side Effects - [tmdbid-228878]");
+        let season_dir = show_dir.join("Season 1");
+        fs::create_dir_all(&season_dir).expect("create season dir");
+
+        let source_media = season_dir.join(
+            "Common Side Effects - S01E08 - Amelia and Wyatt [HDTV-1080p][x265]-AMBER.mkv",
+        );
+        fs::write(&source_media, b"source").expect("write source media");
+
+        let override_data = MetadataOverrideInput {
+            title: Some("Amelia and Wyatt".to_string()),
+            year: Some(2025),
+            provider_id: None,
+            confidence: None,
+        };
+
+        let (target, note) = compute_rename_target(&source_media, Some(&override_data), true)
+            .expect("rename target computed");
+
+        assert_eq!(target.parent(), Some(season_dir.as_path()));
+        assert_eq!(
+            target.file_name().and_then(|v| v.to_str()),
+            Some("Common Side Effects - S01E08 - Amelia and Wyatt.mkv")
+        );
+        assert_eq!(note, "will rename to Jellyfin TV episode format");
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_tv_preserves_hyphenated_episode_subtitle() {
+        let root = unique_temp_dir("rename-target-tv-hyphen-subtitle");
+        fs::create_dir_all(&root).expect("create root");
+
+        let show_dir = root.join("Example Show");
+        let season_dir = show_dir.join("Season 1");
+        fs::create_dir_all(&season_dir).expect("create season dir");
+
+        let source_media =
+            season_dir.join("Example Show - S01E08 - Part 1 - Finale [WEBRip]-AMBER.mkv");
+        fs::write(&source_media, b"source").expect("write source media");
+
+        let (target, _note) =
+            compute_rename_target(&source_media, None, false).expect("rename target computed");
+
+        assert_eq!(
+            target.file_name().and_then(|v| v.to_str()),
+            Some("Example Show - S01E08 - Part 1 - Finale.mkv")
+        );
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_tv_preserves_uppercase_subtitle_segment() {
+        let root = unique_temp_dir("rename-target-tv-uppercase-subtitle");
+        fs::create_dir_all(&root).expect("create root");
+
+        let show_dir = root.join("Example Show");
+        let season_dir = show_dir.join("Season 1");
+        fs::create_dir_all(&season_dir).expect("create season dir");
+
+        let source_media =
+            season_dir.join("Example Show - S01E08 - Part 1 - IV [WEBRip]-AMBER.mkv");
+        fs::write(&source_media, b"source").expect("write source media");
+
+        let (target, _note) =
+            compute_rename_target(&source_media, None, false).expect("rename target computed");
+
+        assert_eq!(
+            target.file_name().and_then(|v| v.to_str()),
+            Some("Example Show - S01E08 - Part 1 - IV.mkv")
+        );
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn episode_token_requires_boundaries() {
+        assert_eq!(
+            find_season_episode_token("Common Side Effects - S01E08 - Amelia and Wyatt"),
+            Some((1, 8, 22, 28))
+        );
+        assert_eq!(find_season_episode_token("BAS01E08Test"), None);
+    }
+
+    #[test]
+    fn rename_target_tv_reports_truncation_when_needed() {
+        let root = unique_temp_dir("rename-target-tv-truncation");
+        fs::create_dir_all(&root).expect("create root");
+
+        let episode_title = format!("{}{}", "Episode", "Y".repeat(280));
+        let show_dir = root.join("Show");
+        let season_dir = show_dir.join("Season 1");
+        fs::create_dir_all(&season_dir).expect("create season dir");
+
+        let source_media = season_dir.join("Show - S01E08.mkv");
+        fs::write(&source_media, b"source").expect("write source media");
+
+        let metadata_override = MetadataOverrideInput {
+            title: Some(episode_title),
+            year: Some(2025),
+            provider_id: None,
+            confidence: None,
+        };
+
+        let (target, note) = compute_rename_target(&source_media, Some(&metadata_override), false)
+            .expect("rename target computed");
+
+        let file_name = target
             .file_name()
             .and_then(|v| v.to_str())
-            .unwrap_or_default()
-            .contains(" - alt"));
-        assert!(note.contains("merge into canonical folder"));
+            .expect("target file name");
+        assert!(
+            file_name.len() <= MAX_PATH_COMPONENT_BYTES,
+            "target file name should fit filesystem component limits"
+        );
+        assert!(note.contains("truncated"));
 
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -4892,11 +5241,13 @@ mod tests {
             .expect("deconflicted merge target");
 
         assert_ne!(merge_target, occupied_target);
-        assert!(merge_target
-            .file_stem()
-            .and_then(|v| v.to_str())
-            .unwrap_or_default()
-            .contains(" - alt"));
+        assert!(
+            merge_target
+                .file_stem()
+                .and_then(|v| v.to_str())
+                .unwrap_or_default()
+                .contains(" - alt")
+        );
         assert!(note.contains("merge into canonical folder"));
 
         fs::remove_dir_all(root).expect("cleanup");
@@ -5020,8 +5371,8 @@ mod tests {
             confidence: None,
         };
 
-        let (target, _note) = compute_rename_target(&media_path, Some(&override_data), false)
-            .expect("rename target");
+        let (target, _note) =
+            compute_rename_target(&media_path, Some(&override_data), false).expect("rename target");
         assert_eq!(
             target.file_name().and_then(|v| v.to_str()),
             Some("Movie - Title (2024).mkv")
@@ -5044,8 +5395,8 @@ mod tests {
             confidence: None,
         };
 
-        let (target, _note) = compute_rename_target(&media_path, Some(&override_data), false)
-            .expect("rename target");
+        let (target, _note) =
+            compute_rename_target(&media_path, Some(&override_data), false).expect("rename target");
         assert_eq!(
             target.file_name().and_then(|v| v.to_str()),
             Some("Movie Name - Part-2 (2024).mkv")
@@ -5073,8 +5424,8 @@ mod tests {
             confidence: None,
         };
 
-        let (target, note) = compute_rename_target(&media_path, Some(&override_data), false)
-            .expect("rename target");
+        let (target, note) =
+            compute_rename_target(&media_path, Some(&override_data), false).expect("rename target");
         let file_name = target
             .file_name()
             .and_then(|v| v.to_str())
@@ -5141,11 +5492,13 @@ mod tests {
         let (merge_target, note) = compute_rename_target(&media_path, Some(&override_data), false)
             .expect("truncated collision should produce deconflicted merge target");
         assert_ne!(merge_target, first_target);
-        assert!(merge_target
-            .file_stem()
-            .and_then(|v| v.to_str())
-            .unwrap_or_default()
-            .contains(" - alt"));
+        assert!(
+            merge_target
+                .file_stem()
+                .and_then(|v| v.to_str())
+                .unwrap_or_default()
+                .contains(" - alt")
+        );
         assert!(note.contains("merge into canonical folder"));
 
         fs::remove_dir_all(root).expect("cleanup");
@@ -5324,11 +5677,13 @@ mod tests {
         assert_eq!(apply.failed, 1);
         let result = apply.items.first().expect("single apply result");
         assert!(!result.success);
-        assert!(result
-            .error
-            .as_deref()
-            .unwrap_or_default()
-            .contains("rename sidecar update failed"));
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("rename sidecar update failed")
+        );
         assert!(source_media.exists());
         assert!(!target_media.exists());
 
@@ -5490,6 +5845,102 @@ mod tests {
 
         let buckets = partition_semantic_group_items(items, 2);
         assert_eq!(buckets.len(), 0);
+    }
+
+    #[test]
+    fn semantic_partition_keeps_same_episode_variants_together() {
+        let items = vec![
+            SemanticDuplicateItem {
+                media_path: "/media/tv/Show/Season 1/Show - S01E01 - A [x264].mkv".to_string(),
+                file_size: 10,
+                content_hash: Some("hash-a".to_string()),
+                video_codec: None,
+                audio_codec: None,
+                width: None,
+                height: None,
+            },
+            SemanticDuplicateItem {
+                media_path: "/media/tv/Show/Season 1/Show - S01E01 - A [x265].mkv".to_string(),
+                file_size: 11,
+                content_hash: Some("hash-b".to_string()),
+                video_codec: None,
+                audio_codec: None,
+                width: None,
+                height: None,
+            },
+        ];
+
+        let mut buckets = partition_semantic_group_items(items, 2);
+        assert_eq!(buckets.len(), 1);
+        let bucket = buckets.pop().expect("single bucket");
+        assert_eq!(bucket.len(), 2);
+        assert!(bucket.iter().all(|item| item.media_path.contains("S01E01")));
+    }
+
+    #[test]
+    fn duplicate_grouping_separates_tv_episodes_by_episode_number() {
+        let items = vec![
+            BulkItemInput {
+                media_path: "/tmp/Show - S01E01 - Pilot [x264].mkv".to_string(),
+                item_uid: None,
+                metadata_override: None,
+                rename_parent_folder: None,
+            },
+            BulkItemInput {
+                media_path: "/tmp/Show - S01E01 - Pilot [x265].mkv".to_string(),
+                item_uid: None,
+                metadata_override: None,
+                rename_parent_folder: None,
+            },
+            BulkItemInput {
+                media_path: "/tmp/Show - S01E02 - Next Episode [x264].mkv".to_string(),
+                item_uid: None,
+                metadata_override: None,
+                rename_parent_folder: None,
+            },
+        ];
+
+        let groups = build_duplicate_groups(&items);
+
+        assert_eq!(groups.len(), 2);
+        assert!(groups.values().any(|group| group.len() == 2));
+        assert!(groups.values().any(|group| {
+            group.len() == 1
+                && group
+                    .first()
+                    .map(|value| value.contains("S01E02"))
+                    .unwrap_or(false)
+        }));
+    }
+
+    #[test]
+    fn episode_signature_requires_boundaries_for_semantic_partition() {
+        assert_eq!(
+            extract_episode_signature_from_media_path(
+                "/media/tv/Show/Season 1/Show - S01E08 - Episode Title.mkv"
+            ),
+            Some("S0001E008".to_string())
+        );
+        assert_eq!(
+            extract_episode_signature_from_media_path("/media/tv/Show/BAS01E08Test.mkv"),
+            None
+        );
+    }
+
+    #[test]
+    fn episode_signature_parses_concatenated_show_name_pattern() {
+        assert_eq!(
+            extract_episode_signature_from_media_path("/media/tv/Show/ShowNameS01E08.mkv"),
+            Some("S0001E008".to_string())
+        );
+    }
+
+    #[test]
+    fn duplicate_key_preserves_non_noise_bracketed_title_suffix() {
+        assert_eq!(
+            normalize_duplicate_key("Show Name [US] S01E01"),
+            "show name us s01e01|none"
+        );
     }
 
     #[test]

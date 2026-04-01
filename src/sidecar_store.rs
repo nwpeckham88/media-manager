@@ -53,7 +53,7 @@ pub fn read_sidecar_at_path(path: &Path) -> Result<Option<SidecarState>, Sidecar
         return Ok(None);
     }
 
-    let contents = fs::read_to_string(&path)
+    let contents = fs::read_to_string(path)
         .map_err(|e| SidecarStoreError::ReadFailed(format!("{} ({})", path.display(), e)))?;
     let state = serde_json::from_str::<SidecarState>(&contents)
         .map_err(|e| SidecarStoreError::DecodeFailed(format!("{} ({})", path.display(), e)))?;
@@ -87,7 +87,7 @@ pub fn write_sidecar_at_path(path: &Path, state: &SidecarState) -> Result<(), Si
         SidecarStoreError::WriteFailed(format!("write {} ({})", temp_path.display(), e))
     })?;
 
-    fs::rename(&temp_path, &path).map_err(|e| {
+    fs::rename(&temp_path, path).map_err(|e| {
         SidecarStoreError::WriteFailed(format!(
             "rename {} -> {} ({})",
             temp_path.display(),

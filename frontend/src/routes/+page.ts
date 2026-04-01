@@ -1,43 +1,17 @@
 import type { PageLoad } from './$types';
+import type {
+	ApiState,
+	DuplicateGroupsSummary,
+	IndexItemsSummary,
+	FormattingCandidatesSummary,
+	RecentJobsResponse
+} from '$lib/types/api';
 
 type IndexStats = {
 	total_indexed: number;
 	hashed: number;
 	probed: number;
 	last_indexed_at_ms: number | null;
-};
-
-type DuplicateGroupsSummary = {
-	total_groups: number;
-};
-
-type IndexItemsSummary = {
-	total_items: number;
-};
-
-type FormattingCandidatesSummary = {
-	total_items: number;
-};
-
-type JobRecord = {
-	id: number;
-	kind: string;
-	status: 'running' | 'succeeded' | 'failed' | 'canceled';
-	created_at_ms: number;
-	updated_at_ms: number;
-	payload_json: string;
-	result_json: string | null;
-	error: string | null;
-};
-
-type RecentJobsResponse = {
-	items: JobRecord[];
-};
-
-type ApiState<T> = {
-	ok: boolean;
-	data?: T;
-	error?: string;
 };
 
 type LoadFetch = Parameters<PageLoad>[0]['fetch'];

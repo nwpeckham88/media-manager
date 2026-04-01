@@ -11,17 +11,8 @@
 		workflowLabelFromJobKind,
 		workflowStageFromJobKind
 	} from '$lib/workflow/progress';
-
-	type JobRecord = {
-		id: number;
-		kind: string;
-		status: 'running' | 'succeeded' | 'failed' | 'canceled';
-		created_at_ms: number;
-		updated_at_ms: number;
-		payload_json: string;
-		result_json: string | null;
-		error: string | null;
-	};
+	import { apiFetch } from '$lib/utils/api';
+	import type { JobRecord, BulkRollbackResponse, ConfirmDialogState } from '$lib/types/api';
 
 	type BulkJobSummary = {
 		total: number;
@@ -31,23 +22,11 @@
 
 	type QueueStatusFilter = 'all' | 'running' | 'succeeded' | 'failed' | 'canceled';
 
-	type RecentJobsResponse = {
+	type QueueJobsResponse = {
 		total_count: number;
 		offset: number;
 		limit: number;
 		items: JobRecord[];
-	};
-
-	type BulkRollbackResponse = {
-		total_items: number;
-		succeeded: number;
-		failed: number;
-		items: Array<{
-			operation_id: string;
-			success: boolean;
-			detail: string | null;
-			error: string | null;
-		}>;
 	};
 
 	type BulkRollbackItem = {
@@ -55,15 +34,6 @@
 		success: boolean;
 		detail: string | null;
 		error: string | null;
-	};
-
-	type ConfirmDialogState = {
-		open: boolean;
-		title: string;
-		message: string;
-		confirmLabel: string;
-		tone: 'default' | 'danger';
-		busy: boolean;
 	};
 
 	let jobs = $state<JobRecord[]>([]);
@@ -113,7 +83,7 @@
 			return;
 		}
 
-		const payload = (await response.json()) as RecentJobsResponse;
+		const payload = (await response.json()) as QueueJobsResponse;
 		totalCount = payload.total_count;
 		offset = payload.offset;
 		pageSize = payload.limit;
@@ -374,7 +344,7 @@
 		}
 
 		const payload = (await response.json()) as BulkRollbackResponse;
-		lastRollbackItems = payload.items;
+		lastRollbackItems = payload.items ?? [];
 		await loadJobs();
 		notice = `Rollback complete: ok=${payload.succeeded}, fail=${payload.failed}.`;
 		const sourceStage = workflowStageFromJobKind(job.kind);
@@ -385,18 +355,6 @@
 		activeJobId = null;
 	}
 
-	async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-		const headers = new Headers(init?.headers ?? {});
-		const token = localStorage.getItem('mm-api-token');
-		if (token && token.trim().length > 0) {
-			headers.set('Authorization', `Bearer ${token.trim()}`);
-		}
-
-		return fetch(input, {
-			...init,
-			headers
-		});
-	}
 </script>
 
 <svelte:head>

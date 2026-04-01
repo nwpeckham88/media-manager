@@ -4,6 +4,8 @@
 	import PageHero from '$lib/components/ui/PageHero.svelte';
 	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import SectionHeader from '$lib/components/ui/SectionHeader.svelte';
+	import { apiFetch } from '$lib/utils/api';
+	import type { BulkDryRunResponse, BulkApplyResponse, ConfirmDialogState } from '$lib/types/api';
 
 	type AppConfig = {
 		library_roots: string[];
@@ -34,62 +36,6 @@
 		year: string;
 		providerId: string;
 		confidence: string;
-	};
-
-	type BulkDryRunResponse = {
-		action: BulkAction;
-		batch_hash: string;
-		total_items: number;
-		plan_ready: boolean;
-		summary: {
-			creates: number;
-			updates: number;
-			noops: number;
-			invalid: number;
-		};
-		items: Array<{
-			media_path: string;
-			item_uid: string;
-			plan: {
-				plan_hash: string;
-				action: 'create' | 'update' | 'noop';
-				sidecar_path: string;
-			} | null;
-			proposed_media_path: string | null;
-			proposed_item_uid: string | null;
-			proposed_provider_id: string | null;
-			metadata_title: string | null;
-			metadata_year: number | null;
-			metadata_confidence: number | null;
-			can_apply: boolean;
-			note: string | null;
-			error: string | null;
-		}>;
-	};
-
-	type BulkApplyResponse = {
-		action: BulkAction;
-		batch_hash: string;
-		total_items: number;
-		succeeded: number;
-		failed: number;
-		items: Array<{
-			media_path: string;
-			final_media_path: string | null;
-			item_uid: string;
-			applied_provider_id: string | null;
-			success: boolean;
-			operation_id: string | null;
-			error: string | null;
-		}>;
-	};
-
-	type ConfirmDialogState = {
-		open: boolean;
-		title: string;
-		message: string;
-		confirmLabel: string;
-		busy: boolean;
 	};
 
 	let config = $state<AppConfig | null>(null);
@@ -242,14 +188,14 @@
 		};
 	}
 
-	function initializeMetadataOverrides(itemsForPreview: BulkDryRunResponse['items']) {
+	function initializeMetadataOverrides(itemsForPreview: NonNullable<BulkDryRunResponse['items']>) {
 		const next: Record<string, MetadataOverrideDraft> = {};
 		for (const item of itemsForPreview) {
 			next[item.media_path] = {
-				title: item.metadata_title ?? item.item_uid,
-				year: item.metadata_year !== null ? String(item.metadata_year) : '',
+				title: item.metadata_title ?? item.item_uid ?? '',
+				year: item.metadata_year != null ? String(item.metadata_year) : '',
 				providerId: item.proposed_provider_id ?? '',
-				confidence: item.metadata_confidence !== null ? item.metadata_confidence.toFixed(2) : ''
+				confidence: item.metadata_confidence != null ? item.metadata_confidence.toFixed(2) : ''
 			};
 		}
 
@@ -303,7 +249,7 @@
 
 		preview = (await response.json()) as BulkDryRunResponse;
 		if (preview.action === 'metadata_lookup') {
-			initializeMetadataOverrides(preview.items);
+			initializeMetadataOverrides(preview.items ?? []);
 			metadataPreviewStale = false;
 		}
 		bulkBusy = false;
@@ -395,18 +341,6 @@
 		bulkBusy = false;
 	}
 
-	async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-		const headers = new Headers(init?.headers ?? {});
-		const token = localStorage.getItem('mm-api-token');
-		if (token && token.trim().length > 0) {
-			headers.set('Authorization', `Bearer ${token.trim()}`);
-		}
-
-		return fetch(input, {
-			...init,
-			headers
-		});
-	}
 </script>
 
 <svelte:head>
@@ -505,7 +439,7 @@
 				</p>
 			{#if preview.action === 'rename'}
 				<ul class="rows mono">
-					{#each preview.items as item}
+					{#each (preview.items ?? []) as item}
 						<li>
 							<span>{item.media_path}</span>
 							<strong>{item.proposed_media_path ?? item.error ?? item.note ?? 'n/a'}</strong>
@@ -515,7 +449,7 @@
 			{/if}
 			{#if preview.action === 'validate_nfo'}
 				<ul class="rows mono">
-					{#each preview.items as item}
+					{#each (preview.items ?? []) as item}
 						<li>
 							<span>{item.media_path}</span>
 							<strong>{item.note ? `${item.proposed_media_path ?? 'nfo'} | ${item.note}` : item.error ?? 'n/a'}</strong>
@@ -525,7 +459,7 @@
 			{/if}
 			{#if preview.action === 'combine_duplicates'}
 				<ul class="rows mono">
-					{#each preview.items as item}
+					{#each (preview.items ?? []) as item}
 						<li>
 							<span>{item.media_path}</span>
 							<strong>{item.proposed_item_uid ?? item.item_uid} {item.note ? `| ${item.note}` : ''}</strong>
@@ -550,7 +484,7 @@
 							</tr>
 						</thead>
 						<tbody>
-							{#each preview.items as item}
+							{#each (preview.items ?? []) as item}
 								<tr>
 									<td>{item.media_path}</td>
 									<td>
@@ -563,7 +497,7 @@
 										<input
 											class="year-input"
 											inputmode="numeric"
-											value={metadataOverrides[item.media_path]?.year ?? (item.metadata_year !== null ? String(item.metadata_year) : '')}
+											value={metadataOverrides[item.media_path]?.year ?? (item.metadata_year != null ? String(item.metadata_year) : '')}
 											oninput={(event) => updateMetadataDraft(item.media_path, 'year', (event.currentTarget as HTMLInputElement).value)}
 										/>
 									</td>
@@ -577,7 +511,7 @@
 										<input
 											class="confidence-input"
 											inputmode="decimal"
-											value={metadataOverrides[item.media_path]?.confidence ?? (item.metadata_confidence !== null ? item.metadata_confidence.toFixed(2) : '')}
+											value={metadataOverrides[item.media_path]?.confidence ?? (item.metadata_confidence != null ? item.metadata_confidence.toFixed(2) : '')}
 											oninput={(event) => updateMetadataDraft(item.media_path, 'confidence', (event.currentTarget as HTMLInputElement).value)}
 										/>
 									</td>
@@ -587,9 +521,9 @@
 					</table>
 				</div>
 			{/if}
-			{#if preview.items.some((item) => item.error)}
+			{#if (preview.items ?? []).some((item) => item.error)}
 				<ul class="rows mono">
-					{#each preview.items.filter((item) => item.error) as item}
+					{#each (preview.items ?? []).filter((item) => item.error) as item}
 						<li>
 							<span>{item.media_path}</span>
 							<strong>{item.error}</strong>

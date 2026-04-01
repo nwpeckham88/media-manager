@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -19,15 +19,15 @@ pub struct PreflightCheck {
 
 pub fn run_preflight(
     library_roots: &[PathBuf],
-    state_dir: &PathBuf,
+    state_dir: &Path,
     toolchain: &ToolchainSnapshot,
 ) -> PreflightReport {
-    let mut checks = Vec::new();
-
-    checks.push(check_library_roots(library_roots));
-    checks.push(check_state_dir(state_dir));
-    checks.push(check_tool("ffmpeg", &toolchain.ffmpeg.status));
-    checks.push(check_tool("ffprobe", &toolchain.ffprobe.status));
+    let mut checks = vec![
+        check_library_roots(library_roots),
+        check_state_dir(state_dir),
+        check_tool("ffmpeg", &toolchain.ffmpeg.status),
+        check_tool("ffprobe", &toolchain.ffprobe.status),
+    ];
 
     if let Some(mediainfo) = &toolchain.mediainfo {
         checks.push(check_tool("mediainfo", &mediainfo.status));
@@ -72,7 +72,7 @@ fn check_library_roots(library_roots: &[PathBuf]) -> PreflightCheck {
     }
 }
 
-fn validate_library_root(path: &PathBuf) -> Result<(), String> {
+fn validate_library_root(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err("missing".to_string());
     }
@@ -86,7 +86,7 @@ fn validate_library_root(path: &PathBuf) -> Result<(), String> {
         .map_err(|err| format!("unreadable: {err}"))
 }
 
-fn check_state_dir(state_dir: &PathBuf) -> PreflightCheck {
+fn check_state_dir(state_dir: &Path) -> PreflightCheck {
     match std::fs::create_dir_all(state_dir) {
         Ok(()) => PreflightCheck {
             name: "state_dir".to_string(),

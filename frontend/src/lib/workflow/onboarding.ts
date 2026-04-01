@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { isBrowser } from '$lib/utils/browser';
 
 export type OnboardingStep = 1 | 2 | 3 | 4;
 export type HashingMode = 'hybrid' | 'strict';
@@ -24,10 +25,6 @@ const DEFAULT_ONBOARDING_STATE: OnboardingState = {
 	lastDetectedMediaFiles: 0,
 	completedAt: null
 };
-
-function isBrowser(): boolean {
-	return typeof window !== 'undefined';
-}
 
 function parseStep(value: unknown): OnboardingStep {
 	if (value === 2 || value === 3 || value === 4) {

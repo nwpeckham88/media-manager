@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import { isBrowser } from '$lib/utils/browser';
 
 export type WorkflowStage = 'consolidation' | 'metadata' | 'formatting' | 'verify';
 
@@ -51,10 +52,6 @@ export const WORKFLOW_STAGES: WorkflowStageDescriptor[] = [
 		description: 'Audit and rollback'
 	}
 ];
-
-function isBrowser(): boolean {
-	return typeof window !== 'undefined';
-}
 
 function normalizeProgress(value: unknown): WorkflowProgress {
 	if (!value || typeof value !== 'object') {

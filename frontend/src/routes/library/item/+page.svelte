@@ -4,6 +4,8 @@
 	import PageHero from '$lib/components/ui/PageHero.svelte';
 	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import SectionHeader from '$lib/components/ui/SectionHeader.svelte';
+	import { apiFetch } from '$lib/utils/api';
+	import type { ConfirmDialogState } from '$lib/types/api';
 
 	type SidecarState = {
 		item_uid: string;
@@ -63,14 +65,6 @@
 		operation_id: string;
 		sidecar_path: string;
 		restored: boolean;
-	};
-
-	type ConfirmDialogState = {
-		open: boolean;
-		title: string;
-		message: string;
-		confirmLabel: string;
-		busy: boolean;
 	};
 
 	let mediaPath = $state('');
@@ -333,18 +327,6 @@
 			: [...desiredState.audio.allowed_layouts, layout];
 	}
 
-	async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-		const headers = new Headers(init?.headers ?? {});
-		const token = localStorage.getItem('mm-api-token');
-		if (token && token.trim().length > 0) {
-			headers.set('Authorization', `Bearer ${token.trim()}`);
-		}
-
-		return fetch(input, {
-			...init,
-			headers
-		});
-	}
 </script>
 
 <svelte:head>

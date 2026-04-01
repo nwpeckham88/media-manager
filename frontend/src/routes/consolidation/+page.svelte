@@ -4,6 +4,8 @@
 	import PageHero from '$lib/components/ui/PageHero.svelte';
 	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import { markStageComplete, markStageIncomplete } from '$lib/workflow/progress';
+	import { apiFetch } from '$lib/utils/api';
+	import type { BulkDryRunResponse, BulkApplyResponse, BulkRollbackResponse } from '$lib/types/api';
 
 	type IndexStatsResponse = {
 		total_indexed: number;
@@ -80,41 +82,6 @@
 			success: boolean;
 			operation_id: string | null;
 		}[];
-	};
-
-	type BulkDryRunResponse = {
-		batch_hash: string;
-		total_items: number;
-		plan_ready: boolean;
-		summary: {
-			invalid: number;
-		};
-		items: {
-			media_path: string;
-			proposed_media_path: string | null;
-			proposed_item_uid: string | null;
-			can_apply: boolean;
-			note: string | null;
-			error: string | null;
-		}[];
-	};
-
-	type BulkApplyResponse = {
-		total_items: number;
-		succeeded: number;
-		failed: number;
-		items: {
-			media_path: string;
-			success: boolean;
-			operation_id: string | null;
-			error: string | null;
-		}[];
-	};
-
-	type BulkRollbackResponse = {
-		total_items: number;
-		succeeded: number;
-		failed: number;
 	};
 
 	let loading = $state(false);
@@ -302,6 +269,18 @@
 		}
 
 		const preview = (await previewResponse.json()) as BulkDryRunResponse;
+		if (!preview.items) {
+			semanticPlanByKey = {
+				...semanticPlanByKey,
+				[key]: {
+					loading: false,
+					error: 'Preview response missing items; try refresh and preview again.',
+					uid,
+					mappings: []
+				}
+			};
+			return;
+		}
 		const mappings = preview.items
 			.filter((item) => item.proposed_media_path && item.can_apply)
 			.map((item) => ({
@@ -651,18 +630,6 @@
 		await refresh();
 	}
 
-	async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-		const headers = new Headers(init?.headers ?? {});
-		const token = localStorage.getItem('mm-api-token');
-		if (token && token.trim().length > 0) {
-			headers.set('Authorization', `Bearer ${token.trim()}`);
-		}
-
-		return fetch(input, {
-			...init,
-			headers
-		});
-	}
 </script>
 
 <svelte:head>

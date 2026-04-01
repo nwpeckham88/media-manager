@@ -12,46 +12,14 @@
 		workflowStageFromJobKind,
 		type WorkflowStage
 	} from '$lib/workflow/progress';
+	import { apiFetch } from '$lib/utils/api';
+	import type { JobRecord, RecentJobsResponse, BulkRollbackResponse, ConfirmDialogState } from '$lib/types/api';
 
 	type OperationEvent = {
 		timestamp_ms: number;
 		kind: string;
 		detail: string;
 		success: boolean;
-	};
-
-	type JobRecord = {
-		id: number;
-		kind: string;
-		status: 'running' | 'succeeded' | 'failed' | 'canceled';
-		updated_at_ms: number;
-		result_json: string | null;
-		error: string | null;
-	};
-
-	type RecentJobsResponse = {
-		items: JobRecord[];
-	};
-
-	type BulkRollbackResponse = {
-		total_items: number;
-		succeeded: number;
-		failed: number;
-		items: Array<{
-			operation_id: string;
-			success: boolean;
-			detail: string | null;
-			error: string | null;
-		}>;
-	};
-
-	type ConfirmDialogState = {
-		open: boolean;
-		title: string;
-		message: string;
-		confirmLabel: string;
-		tone: 'default' | 'danger';
-		busy: boolean;
 	};
 
 	let loading = $state(false);
@@ -197,18 +165,6 @@
 		await refresh();
 	}
 
-	async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-		const headers = new Headers(init?.headers ?? {});
-		const token = localStorage.getItem('mm-api-token');
-		if (token && token.trim().length > 0) {
-			headers.set('Authorization', `Bearer ${token.trim()}`);
-		}
-
-		return fetch(input, {
-			...init,
-			headers
-		});
-	}
 </script>
 
 <svelte:head>
