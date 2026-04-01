@@ -229,10 +229,10 @@ fn scan_root(root: &Path) -> RootScanSummary {
             .and_then(|v| v.to_str())
             .map(|v| v.to_ascii_lowercase());
 
-        if let Some(ext) = extension
-            && allowed.contains(ext.as_str())
-        {
-            media_files += 1;
+        if let Some(ext) = extension {
+            if allowed.contains(ext.as_str()) {
+                media_files += 1;
+            }
         }
     }
 

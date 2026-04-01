@@ -181,13 +181,13 @@ async fn library_items(
 ) -> Result<Json<LibraryBrowseResult>, (StatusCode, String)> {
     let root_index = query.root_index;
     let search_query = query.q.clone();
-    if let Some(idx) = root_index
-        && idx >= state.library_roots.len()
-    {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("root_index {idx} is out of bounds"),
-        ));
+    if let Some(idx) = root_index {
+        if idx >= state.library_roots.len() {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("root_index {idx} is out of bounds"),
+            ));
+        }
     }
 
     let job_id = create_job(
@@ -414,10 +414,10 @@ async fn index_items(
         items.push(row.map_err(internal_error)?);
     }
 
-    if let Some(only_missing_provider) = query.only_missing_provider
-        && only_missing_provider
-    {
-        items.retain(|item| item.parsed_provider_id.is_none());
+    if let Some(only_missing_provider) = query.only_missing_provider {
+        if only_missing_provider {
+            items.retain(|item| item.parsed_provider_id.is_none());
+        }
     }
 
     if let Some(min_confidence) = query.min_confidence {
@@ -487,14 +487,14 @@ async fn formatting_candidates(
         if !media_path.exists() {
             continue;
         }
-        if let Ok((target, note)) = compute_rename_target(&media_path, None, false)
-            && target != media_path
-        {
-            candidates.push(FormattingCandidateItem {
-                media_path: media_path.display().to_string(),
-                proposed_media_path: target.display().to_string(),
-                note,
-            });
+        if let Ok((target, note)) = compute_rename_target(&media_path, None, false) {
+            if target != media_path {
+                candidates.push(FormattingCandidateItem {
+                    media_path: media_path.display().to_string(),
+                    proposed_media_path: target.display().to_string(),
+                    note,
+                });
+            }
         }
     }
 
@@ -2649,17 +2649,18 @@ fn compute_rename_target(
     }
 
     if target.exists() {
-        if should_move_parent
-            && let Some((merge_target, merge_truncated)) =
+        if should_move_parent {
+            if let Some((merge_target, merge_truncated)) =
                 build_merge_collision_target(&target_parent, &normalized, &extension)?
-        {
-            let merge_note = if merge_truncated {
-                "target exists; will merge into canonical folder with deconflicted filename (truncated to fit filesystem limits)".to_string()
-            } else {
-                "target exists; will merge into canonical folder with deconflicted filename"
-                    .to_string()
-            };
-            return Ok((merge_target, merge_note));
+            {
+                let merge_note = if merge_truncated {
+                    "target exists; will merge into canonical folder with deconflicted filename (truncated to fit filesystem limits)".to_string()
+                } else {
+                    "target exists; will merge into canonical folder with deconflicted filename"
+                        .to_string()
+                };
+                return Ok((merge_target, merge_note));
+            }
         }
 
         if was_truncated {
@@ -2861,13 +2862,14 @@ fn build_jellyfin_tv_episode_stem(
         &strip_release_suffix_tokens(episode_suffix),
     ));
 
-    if episode_title.is_empty()
-        && let Some(override_title) =
+    if episode_title.is_empty() {
+        if let Some(override_title) =
             metadata_override.and_then(|value| normalize_optional_string(&value.title))
-    {
-        episode_title = sanitize_display_filename_component(&normalize_title_for_display_name(
-            &strip_trailing_bracketed_metadata(&override_title),
-        ));
+        {
+            episode_title = sanitize_display_filename_component(&normalize_title_for_display_name(
+                &strip_trailing_bracketed_metadata(&override_title),
+            ));
+        }
     }
 
     let mut stem = format!("{show_title} - S{season:02}E{episode:02}");
@@ -3002,12 +3004,14 @@ fn strip_release_suffix_tokens(value: &str) -> String {
             .to_string();
     }
 
-    if !removed_bracket_segment && let Some((prefix, suffix)) = output.rsplit_once('-') {
-        let candidate = suffix.trim();
-        if looks_like_release_group_tag(candidate) {
-            output = prefix
-                .trim_end_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == '_')
-                .to_string();
+    if !removed_bracket_segment {
+        if let Some((prefix, suffix)) = output.rsplit_once('-') {
+            let candidate = suffix.trim();
+            if looks_like_release_group_tag(candidate) {
+                output = prefix
+                    .trim_end_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == '_')
+                    .to_string();
+            }
         }
     }
 
@@ -3465,11 +3469,12 @@ fn normalize_duplicate_key(stem: &str) -> String {
         if noise.contains(&cleaned) {
             continue;
         }
-        if cleaned.len() == 4
-            && let Some(y) = year
-            && cleaned == y.to_string()
-        {
-            continue;
+        if cleaned.len() == 4 {
+            if let Some(y) = year {
+                if cleaned == y.to_string() {
+                    continue;
+                }
+            }
         }
         filtered.push(cleaned);
     }
@@ -3695,10 +3700,10 @@ fn infer_metadata_candidate(
     let mut filtered_tokens: Vec<String> = Vec::new();
     for token in tokens {
         let lowered = token.to_ascii_lowercase();
-        if let Some(y) = year
-            && lowered == y.to_string()
-        {
-            continue;
+        if let Some(y) = year {
+            if lowered == y.to_string() {
+                continue;
+            }
         }
         if noise.contains(&lowered.as_str()) {
             continue;
@@ -3851,10 +3856,10 @@ fn extract_nfo_provider_id(content: &str) -> Option<String> {
         }
     }
 
-    if let Some(tmdbid) = extract_xml_tag_value(content, "tmdbid")
-        && tmdbid.chars().all(|ch| ch.is_ascii_digit())
-    {
-        return Some(format!("tmdb-{tmdbid}"));
+    if let Some(tmdbid) = extract_xml_tag_value(content, "tmdbid") {
+        if tmdbid.chars().all(|ch| ch.is_ascii_digit()) {
+            return Some(format!("tmdb-{tmdbid}"));
+        }
     }
 
     let lower = content.to_ascii_lowercase();
@@ -3975,11 +3980,10 @@ fn extract_provider_id(input: &str) -> (Option<String>, String) {
             if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
                 provider_id = Some(format!("tmdb-{rest}"));
             }
-        } else if let Some(rest) = compact.strip_prefix("tmdb-")
-            && !rest.is_empty()
-            && rest.chars().all(|ch| ch.is_ascii_digit())
-        {
-            provider_id = Some(format!("tmdb-{rest}"));
+        } else if let Some(rest) = compact.strip_prefix("tmdb-") {
+            if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
+                provider_id = Some(format!("tmdb-{rest}"));
+            }
         }
 
         if provider_id.is_some() {
@@ -3997,30 +4001,32 @@ fn extract_year(input: &str) -> (Option<u16>, String) {
     let mut year = None;
     let mut working = input.to_string();
 
-    if let Some(start) = working.rfind('(')
-        && let Some(end_rel) = working[start + 1..].find(')')
-    {
-        let end = start + 1 + end_rel;
-        let candidate = working[start + 1..end].trim();
-        if candidate.len() == 4
-            && let Ok(parsed) = candidate.parse::<u16>()
-            && (1900..=2100).contains(&parsed)
-        {
-            year = Some(parsed);
-            working.replace_range(start..=end, "");
-            return (year, normalize_filename_stem(&working));
+    if let Some(start) = working.rfind('(') {
+        if let Some(end_rel) = working[start + 1..].find(')') {
+            let end = start + 1 + end_rel;
+            let candidate = working[start + 1..end].trim();
+            if candidate.len() == 4 {
+                if let Ok(parsed) = candidate.parse::<u16>() {
+                    if (1900..=2100).contains(&parsed) {
+                        year = Some(parsed);
+                        working.replace_range(start..=end, "");
+                        return (year, normalize_filename_stem(&working));
+                    }
+                }
+            }
         }
     }
 
     for token in input.split_whitespace() {
-        if token.len() == 4
-            && let Ok(parsed) = token.parse::<u16>()
-            && (1900..=2100).contains(&parsed)
-        {
-            year = Some(parsed);
-            let marker = token.to_string();
-            working = working.replace(&marker, " ");
-            break;
+        if token.len() == 4 {
+            if let Ok(parsed) = token.parse::<u16>() {
+                if (1900..=2100).contains(&parsed) {
+                    year = Some(parsed);
+                    let marker = token.to_string();
+                    working = working.replace(&marker, " ");
+                    break;
+                }
+            }
         }
     }
 
