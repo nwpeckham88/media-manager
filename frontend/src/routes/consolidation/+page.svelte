@@ -702,7 +702,7 @@
 								{quarantiningKey === key ? 'Quarantining...' : 'Choose Keeper + Quarantine Rest'}
 							</button>
 						</div>
-						<ul class="rows mono">
+						<ul class="rows mono dense-list">
 							{#each group.items as item}
 								<li>
 									<span>{item.media_path}</span>
@@ -771,7 +771,7 @@
 								{:else if semanticPlanByKey[key].mappings.length === 0}
 									<p class="mono muted">No rename changes are required for current items.</p>
 								{:else}
-									<ul class="rows mono">
+									<ul class="rows mono dense-list">
 										{#each semanticPlanByKey[key].mappings.slice(0, 6) as mapping}
 											<li>
 												<span>{mapping.from}</span>
@@ -785,7 +785,7 @@
 								{/if}
 							</div>
 						{/if}
-						<ul class="rows mono">
+						<ul class="rows mono dense-list">
 							{#each group.items as item}
 								<li>
 									<span>{item.media_path}</span>
@@ -874,6 +874,10 @@
 		margin-bottom: var(--space-2);
 	}
 
+	.actions > * {
+		min-width: 0;
+	}
+
 	button,
 	.queue-link {
 		border-radius: var(--radius-md);
@@ -887,6 +891,10 @@
 		font-size: 0.78rem;
 		line-height: 1.15;
 		min-height: 2rem;
+		max-width: 100%;
+		overflow-wrap: anywhere;
+		word-break: break-word;
+		white-space: normal;
 	}
 
 	button {
@@ -935,10 +943,32 @@
 		font-size: 0.77rem;
 	}
 
+	.dense-list li {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: 0.12rem;
+		align-items: start;
+	}
+
+	.dense-list li > span,
+	.dense-list li > strong {
+		overflow: visible;
+		text-overflow: clip;
+		white-space: normal;
+		overflow-wrap: anywhere;
+		word-break: break-word;
+	}
+
+	.dense-list li > strong {
+		font-size: 0.74rem;
+		font-weight: 600;
+		color: var(--muted);
+	}
+
 	.group-grid {
 		display: grid;
 		gap: var(--space-2);
-		grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+		grid-template-columns: repeat(auto-fit, minmax(520px, 1fr));
 	}
 
 	.group-card {
@@ -946,6 +976,16 @@
 		border-radius: var(--radius-md);
 		padding: var(--space-2);
 		background: color-mix(in srgb, var(--card) 87%, transparent);
+		overflow: hidden;
+	}
+
+	.group-card .mono {
+		overflow-wrap: anywhere;
+		word-break: break-word;
+	}
+
+	.group-card .actions {
+		gap: calc(var(--space-2) * 0.6);
 	}
 
 	.merge-policy {
@@ -986,23 +1026,6 @@
 
 		.group-grid {
 			grid-template-columns: 1fr;
-		}
-
-		.rows li {
-			flex-direction: column;
-			align-items: flex-start;
-			gap: 0.15rem;
-		}
-
-		.rows li > span,
-		.rows li > strong {
-			white-space: normal;
-		}
-
-		.rows li > span {
-			overflow: visible;
-			text-overflow: clip;
-			word-break: break-word;
 		}
 	}
 

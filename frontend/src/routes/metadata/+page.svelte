@@ -22,6 +22,7 @@
 	};
 
 	type BulkAction = 'metadata_lookup';
+	type MetadataProvider = 'tmdb' | 'imdb' | 'tvdb';
 
 	let loading = $state(false);
 	let error = $state('');
@@ -36,10 +37,21 @@
 	let rollbackResult = $state<BulkRollbackResponse | null>(null);
 	let rollbackOperationIds = $state<string[]>([]);
 	let busy = $state(false);
+	let preferredMetadataProvider = $state<MetadataProvider>('tmdb');
 
 	onMount(async () => {
+		await loadGoldenState();
 		await refresh();
 	});
+
+	async function loadGoldenState() {
+		const response = await apiFetch('/api/config/golden-state');
+		if (!response.ok) {
+			return;
+		}
+		const payload = (await response.json()) as { metadata_provider: MetadataProvider };
+		preferredMetadataProvider = payload.metadata_provider;
+	}
 
 	async function refresh() {
 		loading = true;
@@ -52,6 +64,7 @@
 		}
 		if (onlyMissingProvider) {
 			params.set('only_missing_provider', 'true');
+			params.set('desired_provider', preferredMetadataProvider);
 		}
 		params.set('max_confidence', String(maxConfidence));
 
@@ -121,6 +134,7 @@
 				metadata_override: {
 					title: item.parsed_title,
 					year: item.parsed_year,
+					metadata_provider: preferredMetadataProvider,
 					provider_id: item.parsed_provider_id,
 					confidence: item.metadata_confidence
 				}
@@ -238,7 +252,7 @@
 	<PageHero
 		eyebrow="Stage 2"
 		title="Metadata"
-		lead="Review parser output and focus on items missing provider IDs or with lower-confidence metadata inference."
+		lead={`Review parser output and focus on items missing ${preferredMetadataProvider.toUpperCase()} IDs or with lower-confidence metadata inference.`}
 	/>
 
 	<section class="stage-card">

@@ -19,6 +19,7 @@
 		DuplicateGroupsSummary,
 		IndexItemsSummary,
 		FormattingCandidatesSummary,
+		GoldenStateProgress,
 		RecentJobsResponse
 	} from '$lib/types/api';
 
@@ -35,6 +36,7 @@
 			semanticDuplicates: ApiState<DuplicateGroupsSummary>;
 			metadataQueue: ApiState<IndexItemsSummary>;
 			formattingQueue: ApiState<FormattingCandidatesSummary>;
+			goldenStateProgress: ApiState<GoldenStateProgress>;
 			recentJobs: ApiState<RecentJobsResponse>;
 			loadedAt: string;
 		};
@@ -45,6 +47,10 @@
 	let semanticDuplicatesState = $state<ApiState<DuplicateGroupsSummary>>({ ok: false, error: 'Duplicate summary unavailable.' });
 	let metadataQueueState = $state<ApiState<IndexItemsSummary>>({ ok: false, error: 'Metadata queue unavailable.' });
 	let formattingQueueState = $state<ApiState<FormattingCandidatesSummary>>({ ok: false, error: 'Formatting queue unavailable.' });
+	let goldenStateProgressState = $state<ApiState<GoldenStateProgress>>({
+		ok: false,
+		error: 'Golden-state progress unavailable.'
+	});
 	let recentJobsState = $state<ApiState<RecentJobsResponse>>({ ok: false, error: 'Recent jobs unavailable.' });
 	let refreshedAtIso = $state('');
 
@@ -64,8 +70,26 @@
 		const indexed = indexStatsState.ok && indexStatsState.data ? indexStatsState.data.total_indexed : 0;
 		const exact = exactDuplicatesState.ok && exactDuplicatesState.data ? exactDuplicatesState.data.total_groups : 0;
 		const semantic = semanticDuplicatesState.ok && semanticDuplicatesState.data ? semanticDuplicatesState.data.total_groups : 0;
-		const metadataQueue = metadataQueueState.ok && metadataQueueState.data ? metadataQueueState.data.total_items : 0;
-		const formattingQueue = formattingQueueState.ok && formattingQueueState.data ? formattingQueueState.data.total_items : 0;
+		const metadataQueue =
+			goldenStateProgressState.ok && goldenStateProgressState.data
+				? goldenStateProgressState.data.metadata_non_compliant
+				: metadataQueueState.ok && metadataQueueState.data
+					? metadataQueueState.data.total_items
+					: 0;
+		const formattingQueue =
+			goldenStateProgressState.ok && goldenStateProgressState.data
+				? goldenStateProgressState.data.naming_non_compliant
+				: formattingQueueState.ok && formattingQueueState.data
+					? formattingQueueState.data.total_items
+					: 0;
+        const providerLabel =
+            goldenStateProgressState.ok && goldenStateProgressState.data
+                ? goldenStateProgressState.data.metadata_provider.toUpperCase()
+                : 'provider';
+        const namingLabel =
+            goldenStateProgressState.ok && goldenStateProgressState.data
+                ? goldenStateProgressState.data.naming_format
+                : 'configured format';
 
 		return [
 			{ label: 'Indexed Files', value: indexed.toLocaleString(), detail: 'Files currently tracked' },
@@ -74,8 +98,16 @@
 				value: (exact + semantic).toLocaleString(),
 				detail: `Exact ${exact} | Semantic ${semantic}`
 			},
-			{ label: 'Metadata Queue', value: metadataQueue.toLocaleString(), detail: 'Needs provider ID confidence' },
-			{ label: 'Formatting Queue', value: formattingQueue.toLocaleString(), detail: 'Rename candidates pending' }
+			{
+				label: 'Metadata Drift',
+				value: metadataQueue.toLocaleString(),
+				detail: `Needs ${providerLabel} provider alignment`
+			},
+			{
+				label: 'Naming Drift',
+				value: formattingQueue.toLocaleString(),
+				detail: `Not matching ${namingLabel}`
+			}
 		];
 	});
 
@@ -147,18 +179,20 @@
 		semanticDuplicatesState = data.semanticDuplicates;
 		metadataQueueState = data.metadataQueue;
 		formattingQueueState = data.formattingQueue;
+		goldenStateProgressState = data.goldenStateProgress;
 		recentJobsState = data.recentJobs;
 		refreshedAtIso = data.loadedAt;
 	}
 
 	async function refreshDashboardData(): Promise<void> {
-		const [indexStats, exactDuplicates, semanticDuplicates, metadataQueue, formattingQueue, recentJobs] =
+		const [indexStats, exactDuplicates, semanticDuplicates, metadataQueue, formattingQueue, goldenStateProgress, recentJobs] =
 			await Promise.all([
 				readJson<IndexStats>('/api/index/stats'),
 				readJson<DuplicateGroupsSummary>('/api/consolidation/exact-duplicates?limit=1&min_group_size=2'),
 				readJson<DuplicateGroupsSummary>('/api/consolidation/semantic-duplicates?limit=1&min_group_size=2'),
 				readJson<IndexItemsSummary>('/api/index/items?limit=1&offset=0&only_missing_provider=true&max_confidence=0.95'),
 				readJson<FormattingCandidatesSummary>('/api/formatting/candidates?limit=1&offset=0'),
+				readJson<GoldenStateProgress>('/api/workflow/golden-state-progress'),
 				readJson<RecentJobsResponse>('/api/jobs/recent?limit=12')
 			]);
 
@@ -167,6 +201,7 @@
 		semanticDuplicatesState = semanticDuplicates;
 		metadataQueueState = metadataQueue;
 		formattingQueueState = formattingQueue;
+		goldenStateProgressState = goldenStateProgress;
 		recentJobsState = recentJobs;
 		refreshedAtIso = new Date().toISOString();
 		mergeWorkflowProgress(computeDashboardHeuristics());

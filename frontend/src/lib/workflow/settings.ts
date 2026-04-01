@@ -1,12 +1,13 @@
 import { writable } from 'svelte/store';
-import type { HashingMode, RenamePreset } from '$lib/workflow/onboarding';
+import type { HashingMode, MetadataProvider, NamingFormat } from '$lib/workflow/onboarding';
 import { isBrowser } from '$lib/utils/browser';
 
 export type DashboardRefreshPolicy = 'running-jobs-only' | 'always' | 'manual';
 
 export type AppSettings = {
 	defaultHashingMode: HashingMode;
-	renamePreset: RenamePreset;
+	metadataProvider: MetadataProvider;
+	namingFormat: NamingFormat;
 	dashboardRefreshPolicy: DashboardRefreshPolicy;
 };
 
@@ -14,7 +15,8 @@ const STORAGE_KEY = 'mm-app-settings-v1';
 
 const DEFAULT_SETTINGS: AppSettings = {
 	defaultHashingMode: 'hybrid',
-	renamePreset: 'movie_year',
+	metadataProvider: 'tmdb',
+	namingFormat: 'movie_title_subtitle_year',
 	dashboardRefreshPolicy: 'running-jobs-only'
 };
 
@@ -26,7 +28,14 @@ function normalizeSettings(value: unknown): AppSettings {
 	const source = value as Partial<Record<keyof AppSettings, unknown>>;
 	return {
 		defaultHashingMode: source.defaultHashingMode === 'strict' ? 'strict' : 'hybrid',
-		renamePreset: 'movie_year',
+		metadataProvider:
+			source.metadataProvider === 'imdb' || source.metadataProvider === 'tvdb'
+				? source.metadataProvider
+				: 'tmdb',
+		namingFormat:
+			source.namingFormat === 'movie_title_year' || source.namingFormat === 'movie_title_subtitle_year'
+				? source.namingFormat
+				: 'movie_title_subtitle_year',
 		dashboardRefreshPolicy:
 			source.dashboardRefreshPolicy === 'always' || source.dashboardRefreshPolicy === 'manual'
 				? source.dashboardRefreshPolicy

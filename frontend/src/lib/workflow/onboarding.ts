@@ -3,12 +3,14 @@ import { isBrowser } from '$lib/utils/browser';
 
 export type OnboardingStep = 1 | 2 | 3 | 4;
 export type HashingMode = 'hybrid' | 'strict';
-export type RenamePreset = 'movie_year';
+export type MetadataProvider = 'tmdb' | 'imdb' | 'tvdb';
+export type NamingFormat = 'movie_title_year' | 'movie_title_subtitle_year';
 
 export type OnboardingState = {
 	step: OnboardingStep;
 	hashingMode: HashingMode;
-	renamePreset: RenamePreset;
+	metadataProvider: MetadataProvider;
+	namingFormat: NamingFormat;
 	lastDetectedRoots: number;
 	lastDetectedMediaFiles: number;
 	completedAt: string | null;
@@ -20,7 +22,8 @@ export const ONBOARDING_COMPLETE_KEY = 'mm-onboarding-complete-v1';
 const DEFAULT_ONBOARDING_STATE: OnboardingState = {
 	step: 1,
 	hashingMode: 'hybrid',
-	renamePreset: 'movie_year',
+	metadataProvider: 'tmdb',
+	namingFormat: 'movie_title_subtitle_year',
 	lastDetectedRoots: 0,
 	lastDetectedMediaFiles: 0,
 	completedAt: null
@@ -40,13 +43,19 @@ function normalizeOnboardingState(value: unknown): OnboardingState {
 
 	const source = value as Partial<Record<keyof OnboardingState, unknown>>;
 	const mode = source.hashingMode === 'strict' ? 'strict' : 'hybrid';
-	const renamePreset = source.renamePreset === 'movie_year' ? 'movie_year' : 'movie_year';
+	const metadataProvider =
+		source.metadataProvider === 'imdb' || source.metadataProvider === 'tvdb' ? source.metadataProvider : 'tmdb';
+	const namingFormat =
+		source.namingFormat === 'movie_title_year' || source.namingFormat === 'movie_title_subtitle_year'
+			? source.namingFormat
+			: 'movie_title_subtitle_year';
 	const completedAt = typeof source.completedAt === 'string' ? source.completedAt : null;
 
 	return {
 		step: parseStep(source.step),
 		hashingMode: mode,
-		renamePreset: renamePreset,
+		metadataProvider,
+		namingFormat,
 		lastDetectedRoots: Number.isFinite(source.lastDetectedRoots) ? Number(source.lastDetectedRoots) : 0,
 		lastDetectedMediaFiles: Number.isFinite(source.lastDetectedMediaFiles)
 			? Number(source.lastDetectedMediaFiles)

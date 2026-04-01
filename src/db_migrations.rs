@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use thiserror::Error;
 
 #[cfg(test)]
-pub(crate) const LATEST_SCHEMA_VERSION: i64 = 2;
+pub(crate) const LATEST_SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Error)]
 pub enum DbMigrationError {
@@ -125,6 +125,18 @@ fn migrations() -> &'static [Migration] {
 
             CREATE INDEX IF NOT EXISTS idx_media_index_provider
             ON media_index(parsed_provider_id);
+        "#,
+        },
+        Migration {
+            version: 3,
+            name: "golden_state_preferences",
+            sql: r#"
+            CREATE TABLE IF NOT EXISTS golden_state_preferences (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                metadata_provider TEXT NOT NULL,
+                naming_format TEXT NOT NULL,
+                updated_at_ms INTEGER NOT NULL
+            );
         "#,
         },
     ]

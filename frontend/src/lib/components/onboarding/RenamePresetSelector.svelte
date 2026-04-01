@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { RenamePreset } from '$lib/workflow/onboarding';
+	import type { NamingFormat } from '$lib/workflow/onboarding';
 
-	let { value = $bindable<RenamePreset>('movie_year') } = $props<{ value?: RenamePreset }>();
+	let { value = $bindable<NamingFormat>('movie_title_subtitle_year') } = $props<{ value?: NamingFormat }>();
 </script>
 
 <section class="panel" aria-label="Rename Preset">
@@ -12,7 +12,12 @@
 	</header>
 
 	<label class="preset selected">
-		<input type="radio" name="rename-preset" value="movie_year" bind:group={value} />
+		<input
+			type="radio"
+			name="rename-preset"
+			value="movie_title_subtitle_year"
+			bind:group={value}
+		/>
 		<div>
 			<strong>Canonical Jellyfin Naming</strong>
 			<p>Movies: <span class="mono">Movie Name - Subtitle (Year).ext</span></p>

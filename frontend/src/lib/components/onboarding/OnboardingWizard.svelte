@@ -7,7 +7,8 @@
 		onboardingState,
 		updateOnboardingState,
 		type HashingMode,
-		type RenamePreset
+		type MetadataProvider,
+		type NamingFormat
 	} from '$lib/workflow/onboarding';
 	import {
 		appSettings,
@@ -16,7 +17,8 @@
 	} from '$lib/workflow/settings';
 	import IndexingModeSelector from './IndexingModeSelector.svelte';
 	import LibraryDetectionPanel from './LibraryDetectionPanel.svelte';
-	import RenamePresetSelector from './RenamePresetSelector.svelte';
+	import MetadataProviderSelector from './MetadataProviderSelector.svelte';
+	import NamingFormatSelector from './NamingFormatSelector.svelte';
 	import ScanStatusPanel from './ScanStatusPanel.svelte';
 	import type {
 		ApiState,
@@ -43,7 +45,12 @@
 
 	let step = $state<number>(persisted.step);
 	let hashingMode = $state<HashingMode>(persisted.hashingMode ?? settings.defaultHashingMode);
-	let renamePreset = $state<RenamePreset>(persisted.renamePreset ?? settings.renamePreset);
+	let metadataProvider = $state<MetadataProvider>(
+		persisted.metadataProvider ?? settings.metadataProvider ?? 'tmdb'
+	);
+	let namingFormat = $state<NamingFormat>(
+		persisted.namingFormat ?? settings.namingFormat ?? 'movie_title_subtitle_year'
+	);
 	let refreshPolicy = $state<DashboardRefreshPolicy>(settings.dashboardRefreshPolicy);
 	let starting = $state(false);
 	let indexingStarted = $state(false);
@@ -66,7 +73,12 @@
 	});
 
 	$effect(() => {
-		updateOnboardingState({ step: normalizeStep(step), hashingMode, renamePreset });
+		updateOnboardingState({
+			step: normalizeStep(step),
+			hashingMode,
+			metadataProvider,
+			namingFormat
+		});
 	});
 
 	$effect(() => {
@@ -165,17 +177,49 @@
 		return 4;
 	}
 
+	async function saveGoldenStatePreferences(): Promise<boolean> {
+		try {
+			const token = window.localStorage.getItem('mm-api-token');
+			const headers: HeadersInit = {
+				'content-type': 'application/json'
+			};
+			if (token) {
+				headers.Authorization = `Bearer ${token}`;
+			}
+
+			const response = await window.fetch('/api/config/golden-state', {
+				method: 'POST',
+				headers,
+				body: JSON.stringify({
+					metadata_provider: metadataProvider,
+					naming_format: namingFormat
+				})
+			});
+
+			if (!response.ok) {
+				startError = `Failed to save golden-state preferences: HTTP ${response.status}`;
+				return false;
+			}
+			return true;
+		} catch (error) {
+			startError = error instanceof Error ? error.message : 'Unknown error saving preferences';
+			return false;
+		}
+	}
+
 	async function finishSetup() {
 		updateAppSettings({
 			defaultHashingMode: hashingMode,
-			renamePreset,
+			metadataProvider,
+			namingFormat,
 			dashboardRefreshPolicy: refreshPolicy
 		});
 
 		updateOnboardingState({
 			step: 4,
 			hashingMode,
-			renamePreset,
+			metadataProvider,
+			namingFormat,
 			lastDetectedRoots: scanState.ok && scanState.data ? scanState.data.roots.length : 0,
 			lastDetectedMediaFiles: scanState.ok && scanState.data ? scanState.data.total_media_files : 0
 		});
@@ -187,6 +231,11 @@
 	}
 
 	async function finalizeOnboarding() {
+		const saved = await saveGoldenStatePreferences();
+		if (!saved) {
+			return;
+		}
+
 		if (!canFinishWithoutStarting) {
 			const started = await startIndexing();
 			if (!started) {
@@ -205,7 +254,7 @@
 			2. Indexing
 		</button>
 		<button type="button" class:active={step === 3} onclick={() => canAdvanceFromDetection && (step = 3)}>
-			3. Naming + Policy
+			3. Golden State
 		</button>
 		<button type="button" class:active={step === 4} onclick={() => canAdvanceFromDetection && (step = 4)}>
 			4. Launch
@@ -219,11 +268,12 @@
 			<IndexingModeSelector bind:value={hashingMode} />
 		{:else if step === 3}
 			<div class="final-step">
-				<RenamePresetSelector bind:value={renamePreset} />
+				<MetadataProviderSelector bind:value={metadataProvider} />
+				<NamingFormatSelector bind:value={namingFormat} />
 				<section class="policy-card" aria-label="Workflow Policy">
 					<p class="mono label">Workflow Policy</p>
 					<p class="muted">
-						Semantic merges always normalize to canonical naming and exact duplicates always require keeper selection.
+						This defines your golden state. The app will guide metadata and rename stages to converge toward it.
 					</p>
 					<label>
 						<span>Dashboard Refresh Policy</span>

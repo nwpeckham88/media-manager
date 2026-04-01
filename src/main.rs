@@ -4,6 +4,7 @@ mod auth;
 mod config;
 mod db_migrations;
 mod domain;
+mod golden_state_store;
 mod jobs_store;
 mod operations;
 mod path_policy;

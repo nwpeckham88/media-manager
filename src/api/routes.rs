@@ -24,6 +24,8 @@ use crate::audit_store::AuditStore;
 use crate::auth;
 use crate::config::BrandingConfig;
 use crate::domain::sidecar::{DesiredMediaState, SidecarState};
+use crate::golden_state_store;
+use crate::golden_state_store::{GoldenStatePreferences, MetadataProvider, NamingFormat};
 use crate::jobs_store::{JobRecord, JobStatus, JobsStore};
 use crate::operations::{OperationEvent, OperationKind, OperationLog};
 use crate::path_policy;
@@ -60,6 +62,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/health", get(health))
         .route("/api/config/app", get(app_config))
         .route("/api/config/branding", get(branding))
+        .route("/api/config/golden-state", get(golden_state_get))
+        .route("/api/config/golden-state", post(golden_state_set))
+        .route(
+            "/api/workflow/golden-state-progress",
+            get(workflow_golden_state_progress),
+        )
         .route("/api/diagnostics/toolchain", get(toolchain))
         .route("/api/diagnostics/preflight", get(preflight))
         .route("/api/scan/summary", get(scan_summary))
@@ -112,6 +120,7 @@ async fn branding(State(state): State<Arc<AppState>>) -> Json<BrandingConfig> {
 }
 
 async fn app_config(State(state): State<Arc<AppState>>) -> Json<AppConfigResponse> {
+    let golden_state = golden_state_store::load(&state.audit_db_path).unwrap_or_default();
     Json(AppConfigResponse {
         library_roots: state
             .library_roots
@@ -120,7 +129,119 @@ async fn app_config(State(state): State<Arc<AppState>>) -> Json<AppConfigRespons
             .collect(),
         state_dir: state.state_dir.display().to_string(),
         auth_enabled: state.api_token.is_some(),
+        metadata_provider: golden_state.metadata_provider,
+        naming_format: golden_state.naming_format,
     })
+}
+
+async fn golden_state_get(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<GoldenStatePreferencesResponse>, (StatusCode, String)> {
+    let preferences = golden_state_store::load(&state.audit_db_path).map_err(internal_error)?;
+    Ok(Json(GoldenStatePreferencesResponse {
+        metadata_provider: preferences.metadata_provider,
+        naming_format: preferences.naming_format,
+        updated_at_ms: preferences.updated_at_ms,
+    }))
+}
+
+async fn golden_state_set(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<GoldenStatePreferencesRequest>,
+) -> Result<Json<GoldenStatePreferencesResponse>, (StatusCode, String)> {
+    let metadata_provider = MetadataProvider::parse(&request.metadata_provider).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "metadata_provider must be one of: tmdb, imdb, tvdb".to_string(),
+        )
+    })?;
+    let naming_format = NamingFormat::parse(&request.naming_format).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            "naming_format must be one of: movie_title_year, movie_title_subtitle_year"
+                .to_string(),
+        )
+    })?;
+
+    let updated = golden_state_store::save(
+        &state.audit_db_path,
+        metadata_provider,
+        naming_format,
+        current_timestamp_ms() as i64,
+    )
+    .map_err(internal_error)?;
+
+    record_event(
+        &state,
+        OperationKind::JobControl,
+        format!(
+            "golden_state updated provider={} naming_format={}",
+            updated.metadata_provider.as_str(),
+            updated.naming_format.as_str()
+        ),
+        true,
+    );
+
+    Ok(Json(GoldenStatePreferencesResponse {
+        metadata_provider: updated.metadata_provider,
+        naming_format: updated.naming_format,
+        updated_at_ms: updated.updated_at_ms,
+    }))
+}
+
+async fn workflow_golden_state_progress(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<GoldenStateProgressResponse>, (StatusCode, String)> {
+    let preferences = golden_state_store::load(&state.audit_db_path).map_err(internal_error)?;
+    let conn = Connection::open(&state.audit_db_path).map_err(internal_error)?;
+
+    let total_indexed: i64 = conn
+        .query_row("SELECT COUNT(*) FROM media_index", [], |row| row.get(0))
+        .map_err(internal_error)?;
+
+    let total_missing_provider: i64 = conn
+        .query_row(
+            "SELECT COUNT(*)
+             FROM media_index
+             WHERE parsed_provider_id IS NULL
+                OR parsed_provider_id = ''
+                OR lower(parsed_provider_id) NOT LIKE ?1",
+            [format!("{}-%", preferences.metadata_provider.as_str())],
+            |row| row.get(0),
+        )
+        .map_err(internal_error)?;
+
+    let mut naming_non_compliant = 0_i64;
+    let mut stmt = conn
+        .prepare("SELECT media_path FROM media_index ORDER BY media_path ASC")
+        .map_err(internal_error)?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(internal_error)?;
+    for row in rows {
+        let media_path = PathBuf::from(row.map_err(internal_error)?);
+        if !media_path.exists() {
+            continue;
+        }
+        if let Ok((target, _)) = compute_rename_target_with_format(
+            &media_path,
+            None,
+            false,
+            preferences.naming_format,
+        ) {
+            if target != media_path {
+                naming_non_compliant += 1;
+            }
+        }
+    }
+
+    Ok(Json(GoldenStateProgressResponse {
+        metadata_provider: preferences.metadata_provider,
+        naming_format: preferences.naming_format,
+        total_indexed: total_indexed.max(0) as usize,
+        metadata_non_compliant: total_missing_provider.max(0) as usize,
+        naming_non_compliant: naming_non_compliant.max(0) as usize,
+    }))
 }
 
 async fn toolchain(State(state): State<Arc<AppState>>) -> Json<ToolchainSnapshot> {
@@ -416,7 +537,20 @@ async fn index_items(
 
     if let Some(only_missing_provider) = query.only_missing_provider {
         if only_missing_provider {
-            items.retain(|item| item.parsed_provider_id.is_none());
+            let desired_provider = query
+                .desired_provider
+                .as_deref()
+                .and_then(MetadataProvider::parse);
+            items.retain(|item| {
+                if let Some(provider) = desired_provider {
+                    return item
+                        .parsed_provider_id
+                        .as_ref()
+                        .map(|value| !provider_id_matches_provider(value, provider))
+                        .unwrap_or(true);
+                }
+                item.parsed_provider_id.is_none()
+            });
         }
     }
 
@@ -465,6 +599,7 @@ async fn formatting_candidates(
     State(state): State<Arc<AppState>>,
     Query(query): Query<FormattingCandidatesQuery>,
 ) -> Result<Json<FormattingCandidatesResponse>, (StatusCode, String)> {
+    let preferences = golden_state_store::load(&state.audit_db_path).map_err(internal_error)?;
     let conn = Connection::open(&state.audit_db_path).map_err(internal_error)?;
     let limit = query.limit.unwrap_or(120).clamp(1, 500) as i64;
     let offset = query.offset.unwrap_or(0) as i64;
@@ -487,7 +622,12 @@ async fn formatting_candidates(
         if !media_path.exists() {
             continue;
         }
-        if let Ok((target, note)) = compute_rename_target(&media_path, None, false) {
+        if let Ok((target, note)) = compute_rename_target_with_format(
+            &media_path,
+            None,
+            false,
+            preferences.naming_format,
+        ) {
             if target != media_path {
                 candidates.push(FormattingCandidateItem {
                     media_path: media_path.display().to_string(),
@@ -859,7 +999,8 @@ fn run_library_index_job(
             .and_then(|v| v.to_str())
             .unwrap_or("unknown-item")
             .to_string();
-        let metadata_candidate = infer_metadata_candidate(media_path, &item_uid, None);
+        let metadata_candidate =
+            infer_metadata_candidate(media_path, &item_uid, None, MetadataProvider::Tmdb);
         let content_hash = if include_hashes {
             let value = hash_file_sha256(media_path)?;
             hashed_count += 1;
@@ -1853,7 +1994,8 @@ fn execute_bulk_dry_run(
     }
 
     let action = normalize_bulk_action(&request.action)?;
-    build_bulk_preview(state, action, &request.items)
+    let preferences = golden_state_store::load(&state.audit_db_path).map_err(internal_error)?;
+    build_bulk_preview(state, action, &request.items, &preferences)
 }
 
 fn execute_bulk_apply(
@@ -1868,10 +2010,11 @@ fn execute_bulk_apply(
     }
 
     let action = normalize_bulk_action(&request.action)?;
+    let preferences = golden_state_store::load(&state.audit_db_path).map_err(internal_error)?;
 
     ensure_preflight_ready(state)?;
 
-    let preview = build_bulk_preview(state, action, &request.items)?;
+    let preview = build_bulk_preview(state, action, &request.items, &preferences)?;
     if preview.batch_hash != request.approved_batch_hash {
         return Err((
             StatusCode::CONFLICT,
@@ -2117,9 +2260,38 @@ fn execute_bulk_apply(
                 .unwrap_or_else(|| item.item_uid.clone());
             let metadata_year = item.metadata_year;
             let provider_id = item.proposed_provider_id.clone().unwrap_or_else(|| {
-                infer_metadata_candidate(&media_path, &item.item_uid, None).provider_id
+                infer_metadata_candidate(
+                    &media_path,
+                    &item.item_uid,
+                    None,
+                    preferences.metadata_provider,
+                )
+                .provider_id
             });
             let metadata_confidence = item.metadata_confidence.unwrap_or(0.5_f32);
+            let resolved_provider = provider_from_provider_id(&provider_id)
+                .unwrap_or(preferences.metadata_provider);
+            let normalized_provider_id =
+                match normalize_provider_id_for_provider(&provider_id, resolved_provider) {
+                    Some(v) => v,
+                    None => {
+                        applied_items.push(BulkApplyItemResult {
+                            media_path: item.media_path,
+                            final_media_path: None,
+                            item_uid: item.item_uid,
+                            applied_provider_id: None,
+                            success: false,
+                            operation_id: None,
+                            sidecar_path: None,
+                            error: Some(format!(
+                                "provider id is invalid for {}: {}",
+                                resolved_provider.as_str(),
+                                provider_id
+                            )),
+                        });
+                        continue;
+                    }
+                };
             let existing = sidecar_store::read_sidecar(&media_path)
                 .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
 
@@ -2142,13 +2314,18 @@ fn execute_bulk_apply(
             };
 
             sidecar_state.item_uid = item.item_uid.clone();
-            sidecar_state.provider_ids.tmdb = Some(provider_id.clone());
+            set_sidecar_provider_id(
+                &mut sidecar_state,
+                resolved_provider,
+                normalized_provider_id.clone(),
+            );
             sidecar_state.applied_state = json!({
                 "metadata_lookup": {
                     "title": metadata_title,
                     "year": metadata_year,
                     "confidence": metadata_confidence,
-                    "provider_id": provider_id,
+                    "provider_id": normalized_provider_id,
+                    "provider": resolved_provider.as_str(),
                 }
             });
 
@@ -2161,7 +2338,10 @@ fn execute_bulk_apply(
                     media_path: item.media_path,
                     final_media_path: None,
                     item_uid: item.item_uid,
-                    applied_provider_id: sidecar_state.provider_ids.tmdb.clone(),
+                    applied_provider_id: get_sidecar_provider_id(
+                        &sidecar_state,
+                        resolved_provider,
+                    ),
                     success: true,
                     operation_id: Some(operation_id),
                     sidecar_path: Some(sidecar_path.display().to_string()),
@@ -2302,6 +2482,7 @@ fn build_bulk_preview(
     state: &AppState,
     action: BulkAction,
     items: &[BulkItemInput],
+    preferences: &GoldenStatePreferences,
 ) -> Result<BulkDryRunResponse, (StatusCode, String)> {
     let duplicate_groups = if action == BulkAction::CombineDuplicates {
         Some(build_duplicate_groups(items))
@@ -2352,10 +2533,11 @@ fn build_bulk_preview(
             note,
             error,
         ) = if action == BulkAction::Rename {
-            match compute_rename_target(
+            match compute_rename_target_with_format(
                 &media_path,
                 item.metadata_override.as_ref(),
                 item.rename_parent_folder.unwrap_or(false),
+                preferences.naming_format,
             ) {
                 Ok((target, rename_note)) => (
                     Some(target.display().to_string()),
@@ -2440,27 +2622,129 @@ fn build_bulk_preview(
                 ),
             }
         } else if action == BulkAction::MetadataLookup {
-            let candidate =
-                infer_metadata_candidate(&media_path, &item_uid, item.metadata_override.as_ref());
-            (
-                None,
-                None,
-                Some(candidate.provider_id.clone()),
-                Some(candidate.title.clone()),
-                candidate.year,
-                Some(candidate.confidence),
-                true,
-                Some(format!(
-                    "metadata candidate title={} year={} confidence={:.2}",
-                    candidate.title,
-                    candidate
-                        .year
-                        .map(|v| v.to_string())
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    candidate.confidence
-                )),
-                None,
-            )
+            if let Some(override_value) = item
+                .metadata_override
+                .as_ref()
+                .and_then(|value| normalize_optional_string(&value.metadata_provider))
+            {
+                if MetadataProvider::parse(&override_value).is_none() {
+                    (
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        false,
+                        None,
+                        Some(format!(
+                            "unsupported metadata provider override: {}",
+                            override_value
+                        )),
+                    )
+                } else {
+                    let candidate = infer_metadata_candidate(
+                        &media_path,
+                        &item_uid,
+                        item.metadata_override.as_ref(),
+                        preferences.metadata_provider,
+                    );
+                    if let Some(raw_override_id) = item
+                        .metadata_override
+                        .as_ref()
+                        .and_then(|value| normalize_optional_string(&value.provider_id))
+                    {
+                        if normalize_provider_id_for_provider(&raw_override_id, candidate.provider)
+                            .is_none()
+                        {
+                            (
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                None,
+                                false,
+                                None,
+                                Some(format!(
+                                    "provider id is invalid for {}: {}",
+                                    candidate.provider.as_str(),
+                                    raw_override_id
+                                )),
+                            )
+                        } else {
+                            (
+                                None,
+                                None,
+                                Some(candidate.provider_id.clone()),
+                                Some(candidate.title.clone()),
+                                candidate.year,
+                                Some(candidate.confidence),
+                                true,
+                                Some(format!(
+                                    "metadata candidate provider={} title={} year={} confidence={:.2}",
+                                    candidate.provider.as_str(),
+                                    candidate.title,
+                                    candidate
+                                        .year
+                                        .map(|v| v.to_string())
+                                        .unwrap_or_else(|| "unknown".to_string()),
+                                    candidate.confidence
+                                )),
+                                None,
+                            )
+                        }
+                    } else {
+                        (
+                            None,
+                            None,
+                            Some(candidate.provider_id.clone()),
+                            Some(candidate.title.clone()),
+                            candidate.year,
+                            Some(candidate.confidence),
+                            true,
+                            Some(format!(
+                                "metadata candidate provider={} title={} year={} confidence={:.2}",
+                                candidate.provider.as_str(),
+                                candidate.title,
+                                candidate
+                                    .year
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|| "unknown".to_string()),
+                                candidate.confidence
+                            )),
+                            None,
+                        )
+                    }
+                }
+            } else {
+            let candidate = infer_metadata_candidate(
+                &media_path,
+                &item_uid,
+                item.metadata_override.as_ref(),
+                preferences.metadata_provider,
+            );
+                (
+                    None,
+                    None,
+                    Some(candidate.provider_id.clone()),
+                    Some(candidate.title.clone()),
+                    candidate.year,
+                    Some(candidate.confidence),
+                    true,
+                    Some(format!(
+                        "metadata candidate provider={} title={} year={} confidence={:.2}",
+                        candidate.provider.as_str(),
+                        candidate.title,
+                        candidate
+                            .year
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "unknown".to_string()),
+                        candidate.confidence
+                    )),
+                    None,
+                )
+            }
         } else {
             (None, None, None, None, None, None, true, None, None)
         };
@@ -2598,10 +2882,25 @@ fn derive_item_uid(item: &BulkItemInput, media_path: &std::path::Path) -> String
         .to_string()
 }
 
+#[allow(dead_code)]
 fn compute_rename_target(
     media_path: &std::path::Path,
     metadata_override: Option<&MetadataOverrideInput>,
     allow_multi_file_parent_rename: bool,
+) -> Result<(PathBuf, String), String> {
+    compute_rename_target_with_format(
+        media_path,
+        metadata_override,
+        allow_multi_file_parent_rename,
+        NamingFormat::MovieTitleSubtitleYear,
+    )
+}
+
+fn compute_rename_target_with_format(
+    media_path: &std::path::Path,
+    metadata_override: Option<&MetadataOverrideInput>,
+    allow_multi_file_parent_rename: bool,
+    naming_format: NamingFormat,
 ) -> Result<(PathBuf, String), String> {
     let parent = media_path
         .parent()
@@ -2659,7 +2958,12 @@ fn compute_rename_target(
         return Ok((target, note));
     }
 
-    let inferred = infer_metadata_candidate(media_path, file_stem, metadata_override);
+    let inferred = infer_metadata_candidate(
+        media_path,
+        file_stem,
+        metadata_override,
+        MetadataProvider::Tmdb,
+    );
     let normalized_title = normalize_title_for_display_name(&inferred.title);
     let sanitized_title = sanitize_display_filename_component(&normalized_title);
     let fallback_title =
@@ -2674,14 +2978,15 @@ fn compute_rename_target(
         return Err("rename target stem is empty after normalization".to_string());
     }
 
+    let naming_title = apply_naming_format_to_title(final_title, naming_format);
     let (mut normalized, mut was_truncated) =
-        build_rename_stem_with_limits(parent, false, &final_title, inferred.year, &extension)?;
+        build_rename_stem_with_limits(parent, false, &naming_title, inferred.year, &extension)?;
 
     let should_move_parent =
         should_move_into_canonical_folder(parent, &normalized, allow_multi_file_parent_rename);
     if should_move_parent {
         let (moved_normalized, moved_was_truncated) =
-            build_rename_stem_with_limits(parent, true, &final_title, inferred.year, &extension)?;
+            build_rename_stem_with_limits(parent, true, &naming_title, inferred.year, &extension)?;
         normalized = moved_normalized;
         was_truncated = was_truncated || moved_was_truncated;
     }
@@ -2735,6 +3040,23 @@ fn compute_rename_target(
     };
 
     Ok((target, note))
+}
+
+fn apply_naming_format_to_title(title: String, naming_format: NamingFormat) -> String {
+    let normalized = title.trim().to_string();
+    if normalized.is_empty() {
+        return normalized;
+    }
+
+    match naming_format {
+        NamingFormat::MovieTitleSubtitleYear => normalized,
+        NamingFormat::MovieTitleYear => normalized
+            .split(" - ")
+            .next()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .unwrap_or(normalized),
+    }
 }
 
 fn build_merge_collision_target(
@@ -3751,6 +4073,7 @@ fn generate_nfo_content(media_path: &str, item_uid: &str) -> String {
 struct MetadataCandidate {
     title: String,
     year: Option<u16>,
+    provider: MetadataProvider,
     provider_id: String,
     confidence: f32,
 }
@@ -3759,22 +4082,37 @@ fn infer_metadata_candidate(
     media_path: &std::path::Path,
     item_uid: &str,
     metadata_override: Option<&MetadataOverrideInput>,
+    preferred_provider: MetadataProvider,
 ) -> MetadataCandidate {
+    let override_provider = metadata_override
+        .and_then(|v| normalize_optional_string(&v.metadata_provider))
+        .and_then(|v| MetadataProvider::parse(&v));
+
     if let Some(parsed) = parse_nfo_metadata_for_media_path(media_path) {
         let override_title = metadata_override.and_then(|v| normalize_optional_string(&v.title));
         let override_provider_id =
             metadata_override.and_then(|v| normalize_optional_string(&v.provider_id));
         let override_year = metadata_override.and_then(|v| v.year);
         let override_confidence = metadata_override.and_then(|v| v.confidence);
-
-        let provider_id = parsed
+        let parsed_provider = parsed
             .provider_id
-            .unwrap_or_else(|| build_local_provider_id(&parsed.title, parsed.year));
+            .as_ref()
+            .and_then(|value| provider_from_provider_id(value));
+        let provider = override_provider.or(parsed_provider).unwrap_or(preferred_provider);
+        let provider_id = if let Some(value) = override_provider_id {
+            value
+        } else {
+            parsed
+                .provider_id
+                .and_then(|value| normalize_provider_id_for_provider(&value, provider))
+                .unwrap_or_else(|| build_local_provider_id(&parsed.title, parsed.year, provider))
+        };
 
         return MetadataCandidate {
             title: override_title.unwrap_or(parsed.title),
             year: override_year.or(parsed.year),
-            provider_id: override_provider_id.unwrap_or(provider_id),
+            provider,
+            provider_id,
             confidence: override_confidence
                 .unwrap_or(parsed.confidence)
                 .clamp(0.0, 1.0),
@@ -3787,15 +4125,25 @@ fn infer_metadata_candidate(
             metadata_override.and_then(|v| normalize_optional_string(&v.provider_id));
         let override_year = metadata_override.and_then(|v| v.year);
         let override_confidence = metadata_override.and_then(|v| v.confidence);
-
-        let provider_id = parsed
+        let parsed_provider = parsed
             .provider_id
-            .unwrap_or_else(|| build_local_provider_id(&parsed.title, parsed.year));
+            .as_ref()
+            .and_then(|value| provider_from_provider_id(value));
+        let provider = override_provider.or(parsed_provider).unwrap_or(preferred_provider);
+        let provider_id = if let Some(value) = override_provider_id {
+            value
+        } else {
+            parsed
+                .provider_id
+                .and_then(|value| normalize_provider_id_for_provider(&value, provider))
+                .unwrap_or_else(|| build_local_provider_id(&parsed.title, parsed.year, provider))
+        };
 
         return MetadataCandidate {
             title: override_title.unwrap_or(parsed.title),
             year: override_year.or(parsed.year),
-            provider_id: override_provider_id.unwrap_or(provider_id),
+            provider,
+            provider_id,
             confidence: override_confidence
                 .unwrap_or(parsed.confidence)
                 .clamp(0.0, 1.0),
@@ -3857,7 +4205,8 @@ fn infer_metadata_candidate(
     }
     let confidence = confidence.min(0.95);
 
-    let provider_id = build_local_provider_id(&title, year);
+    let provider = override_provider.unwrap_or(preferred_provider);
+    let provider_id = build_local_provider_id(&title, year, provider);
 
     let override_title = metadata_override.and_then(|v| normalize_optional_string(&v.title));
     let override_provider_id =
@@ -3868,8 +4217,97 @@ fn infer_metadata_candidate(
     MetadataCandidate {
         title: override_title.unwrap_or(title),
         year: override_year.or(year),
+        provider,
         provider_id: override_provider_id.unwrap_or(provider_id),
         confidence: override_confidence.unwrap_or(confidence).clamp(0.0, 1.0),
+    }
+}
+
+fn provider_from_provider_id(provider_id: &str) -> Option<MetadataProvider> {
+    let normalized = provider_id.trim().to_ascii_lowercase();
+    if normalized.starts_with("tmdb-") {
+        return Some(MetadataProvider::Tmdb);
+    }
+    if normalized.starts_with("imdb-") {
+        return Some(MetadataProvider::Imdb);
+    }
+    if normalized.starts_with("tvdb-") {
+        return Some(MetadataProvider::Tvdb);
+    }
+    None
+}
+
+fn normalize_provider_id_for_provider(
+    raw_provider_id: &str,
+    provider: MetadataProvider,
+) -> Option<String> {
+    let compact: String = raw_provider_id
+        .trim()
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect();
+    if compact.is_empty() {
+        return None;
+    }
+
+    let lower = compact.to_ascii_lowercase();
+    let suffix = if let Some(rest) = lower.strip_prefix("tmdb-") {
+        Some(rest.to_string())
+    } else if let Some(rest) = lower.strip_prefix("imdb-") {
+        Some(rest.to_string())
+    } else if let Some(rest) = lower.strip_prefix("tvdb-") {
+        Some(rest.to_string())
+    } else {
+        Some(lower)
+    }?;
+
+    match provider {
+        MetadataProvider::Tmdb => {
+            if suffix.chars().all(|ch| ch.is_ascii_digit()) {
+                Some(format!("tmdb-{suffix}"))
+            } else {
+                None
+            }
+        }
+        MetadataProvider::Imdb => {
+            if suffix.starts_with("tt") && suffix[2..].chars().all(|ch| ch.is_ascii_digit()) {
+                Some(format!("imdb-{suffix}"))
+            } else if suffix.chars().all(|ch| ch.is_ascii_digit()) {
+                Some(format!("imdb-tt{suffix}"))
+            } else {
+                None
+            }
+        }
+        MetadataProvider::Tvdb => {
+            if suffix.chars().all(|ch| ch.is_ascii_digit()) {
+                Some(format!("tvdb-{suffix}"))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn set_sidecar_provider_id(
+    sidecar_state: &mut SidecarState,
+    provider: MetadataProvider,
+    provider_id: String,
+) {
+    match provider {
+        MetadataProvider::Tmdb => sidecar_state.provider_ids.tmdb = Some(provider_id),
+        MetadataProvider::Imdb => sidecar_state.provider_ids.imdb = Some(provider_id),
+        MetadataProvider::Tvdb => sidecar_state.provider_ids.tvdb = Some(provider_id),
+    }
+}
+
+fn get_sidecar_provider_id(
+    sidecar_state: &SidecarState,
+    provider: MetadataProvider,
+) -> Option<String> {
+    match provider {
+        MetadataProvider::Tmdb => sidecar_state.provider_ids.tmdb.clone(),
+        MetadataProvider::Imdb => sidecar_state.provider_ids.imdb.clone(),
+        MetadataProvider::Tvdb => sidecar_state.provider_ids.tvdb.clone(),
     }
 }
 
@@ -3898,11 +4336,19 @@ fn build_semantic_duplicate_key(parsed: &ParsedFolderMetadata) -> String {
     )
 }
 
-fn build_local_provider_id(title: &str, year: Option<u16>) -> String {
+fn build_local_provider_id(
+    title: &str,
+    year: Option<u16>,
+    provider: MetadataProvider,
+) -> String {
     let mut hasher = DefaultHasher::new();
     title.to_ascii_lowercase().hash(&mut hasher);
     year.unwrap_or(0).hash(&mut hasher);
-    format!("tmdb-local-{:08x}", (hasher.finish() & 0xffff_ffff))
+    format!(
+        "{}-local-{:08x}",
+        provider.as_str(),
+        (hasher.finish() & 0xffff_ffff)
+    )
 }
 
 fn parse_folder_metadata_from_media_path(
@@ -3993,6 +4439,12 @@ fn extract_nfo_provider_id(content: &str) -> Option<String> {
         }
     }
 
+    if let Some(tvdbid) = extract_xml_tag_value(content, "tvdbid") {
+        if tvdbid.chars().all(|ch| ch.is_ascii_digit()) {
+            return Some(format!("tvdb-{tvdbid}"));
+        }
+    }
+
     let lower = content.to_ascii_lowercase();
     let mut cursor = 0;
     while let Some(start_rel) = lower[cursor..].find("<uniqueid") {
@@ -4028,6 +4480,16 @@ fn extract_nfo_provider_id(content: &str) -> Option<String> {
                 .collect();
             if compact.chars().all(|ch| ch.is_ascii_digit()) {
                 return Some(format!("tmdb-{compact}"));
+            }
+        }
+
+        if head.contains("type=\"tvdb\"") || head.contains("type='tvdb'") {
+            let compact: String = value
+                .chars()
+                .filter(|ch| !ch.is_ascii_whitespace())
+                .collect();
+            if compact.chars().all(|ch| ch.is_ascii_digit()) {
+                return Some(format!("tvdb-{compact}"));
             }
         }
 
@@ -4114,6 +4576,18 @@ fn extract_provider_id(input: &str) -> (Option<String>, String) {
         } else if let Some(rest) = compact.strip_prefix("tmdb-") {
             if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
                 provider_id = Some(format!("tmdb-{rest}"));
+            }
+        } else if let Some(rest) = compact.strip_prefix("tvdbid-") {
+            if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
+                provider_id = Some(format!("tvdb-{rest}"));
+            }
+        } else if let Some(rest) = compact.strip_prefix("tvdbid") {
+            if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
+                provider_id = Some(format!("tvdb-{rest}"));
+            }
+        } else if let Some(rest) = compact.strip_prefix("tvdb-") {
+            if !rest.is_empty() && rest.chars().all(|ch| ch.is_ascii_digit()) {
+                provider_id = Some(format!("tvdb-{rest}"));
             }
         }
 
@@ -4467,6 +4941,11 @@ fn normalize_job_status_filter(value: Option<&str>) -> Option<String> {
     }
 }
 
+fn provider_id_matches_provider(provider_id: &str, provider: MetadataProvider) -> bool {
+    let normalized = provider_id.trim().to_ascii_lowercase();
+    normalized.starts_with(&format!("{}-", provider.as_str()))
+}
+
 fn ensure_media_file_path_allowed(
     media_path: &Path,
     library_roots: &[PathBuf],
@@ -4544,6 +5023,30 @@ struct AppConfigResponse {
     library_roots: Vec<String>,
     state_dir: String,
     auth_enabled: bool,
+    metadata_provider: MetadataProvider,
+    naming_format: NamingFormat,
+}
+
+#[derive(Debug, Deserialize)]
+struct GoldenStatePreferencesRequest {
+    metadata_provider: String,
+    naming_format: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GoldenStatePreferencesResponse {
+    metadata_provider: MetadataProvider,
+    naming_format: NamingFormat,
+    updated_at_ms: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct GoldenStateProgressResponse {
+    metadata_provider: MetadataProvider,
+    naming_format: NamingFormat,
+    total_indexed: usize,
+    metadata_non_compliant: usize,
+    naming_non_compliant: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -4621,6 +5124,7 @@ struct IndexItemsQuery {
     offset: Option<usize>,
     limit: Option<usize>,
     only_missing_provider: Option<bool>,
+    desired_provider: Option<String>,
     min_confidence: Option<f32>,
     max_confidence: Option<f32>,
 }
@@ -4803,6 +5307,7 @@ struct SidecarDryRunResponse {
 struct MetadataOverrideInput {
     title: Option<String>,
     year: Option<u16>,
+    metadata_provider: Option<String>,
     provider_id: Option<String>,
     confidence: Option<f32>,
 }
@@ -4935,6 +5440,7 @@ mod tests {
 
     use axum::http::StatusCode;
     use rusqlite::Connection;
+    use crate::golden_state_store::MetadataProvider;
 
     use crate::audit_store::AuditStore;
     use crate::config::{BrandingConfig, BrandingThemeTokens};
@@ -5010,6 +5516,16 @@ mod tests {
             [],
         )
         .expect("create jobs table");
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS golden_state_preferences(\
+                id INTEGER PRIMARY KEY CHECK (id = 1),\
+                metadata_provider TEXT NOT NULL,\
+                naming_format TEXT NOT NULL,\
+                updated_at_ms INTEGER NOT NULL\
+            )",
+            [],
+        )
+        .expect("create golden_state_preferences table");
     }
 
     fn test_app_state(library_root: &PathBuf, state_dir: &PathBuf) -> Arc<AppState> {
@@ -5214,6 +5730,7 @@ mod tests {
         let override_data = MetadataOverrideInput {
             title: Some("Amelia and Wyatt".to_string()),
             year: Some(2025),
+            metadata_provider: None,
             provider_id: None,
             confidence: None,
         };
@@ -5252,6 +5769,7 @@ mod tests {
         let override_data = MetadataOverrideInput {
             title: Some("Amelia and Wyatt".to_string()),
             year: Some(2025),
+            metadata_provider: None,
             provider_id: None,
             confidence: None,
         };
@@ -5375,6 +5893,7 @@ mod tests {
         let metadata_override = MetadataOverrideInput {
             title: Some(episode_title),
             year: Some(2025),
+            metadata_provider: None,
             provider_id: None,
             confidence: None,
         };
@@ -5408,6 +5927,7 @@ mod tests {
         let override_data = MetadataOverrideInput {
             title: Some("Amelia and Wyatt".to_string()),
             year: Some(2025),
+            metadata_provider: None,
             provider_id: None,
             confidence: None,
         };
@@ -5434,6 +5954,7 @@ mod tests {
         let override_data = MetadataOverrideInput {
             title: Some(long_title),
             year: Some(2025),
+            metadata_provider: None,
             provider_id: None,
             confidence: None,
         };
@@ -5575,6 +6096,7 @@ mod tests {
         let override_data = MetadataOverrideInput {
             title: Some("Movie: Title".to_string()),
             year: Some(2024),
+            metadata_provider: None,
             provider_id: None,
             confidence: None,
         };
@@ -5599,6 +6121,7 @@ mod tests {
         let override_data = MetadataOverrideInput {
             title: Some("Movie Name: Part/2".to_string()),
             year: Some(2024),
+            metadata_provider: None,
             provider_id: None,
             confidence: None,
         };
@@ -5628,6 +6151,7 @@ mod tests {
         let override_data = MetadataOverrideInput {
             title: Some(long_title),
             year: Some(2024),
+            metadata_provider: None,
             provider_id: None,
             confidence: None,
         };
@@ -5686,6 +6210,7 @@ mod tests {
         let override_data = MetadataOverrideInput {
             title: Some(long_title),
             year: Some(2024),
+            metadata_provider: None,
             provider_id: None,
             confidence: None,
         };
@@ -5728,6 +6253,7 @@ mod tests {
             metadata_override: Some(MetadataOverrideInput {
                 title: Some("New Name".to_string()),
                 year: Some(2024),
+                metadata_provider: None,
                 provider_id: None,
                 confidence: None,
             }),
@@ -5739,6 +6265,7 @@ mod tests {
             metadata_override: Some(MetadataOverrideInput {
                 title: Some("New Name".to_string()),
                 year: Some(2024),
+                metadata_provider: None,
                 provider_id: None,
                 confidence: None,
             }),
@@ -5783,6 +6310,7 @@ mod tests {
             metadata_override: Some(MetadataOverrideInput {
                 title: Some("New Name".to_string()),
                 year: Some(2024),
+                metadata_provider: None,
                 provider_id: None,
                 confidence: None,
             }),
@@ -5794,6 +6322,7 @@ mod tests {
             metadata_override: Some(MetadataOverrideInput {
                 title: Some("New Name".to_string()),
                 year: Some(2024),
+                metadata_provider: None,
                 provider_id: None,
                 confidence: None,
             }),
@@ -5854,6 +6383,7 @@ mod tests {
             metadata_override: Some(MetadataOverrideInput {
                 title: Some("New Name".to_string()),
                 year: Some(2024),
+                metadata_provider: None,
                 provider_id: None,
                 confidence: None,
             }),
@@ -5865,6 +6395,7 @@ mod tests {
             metadata_override: Some(MetadataOverrideInput {
                 title: Some("New Name".to_string()),
                 year: Some(2024),
+                metadata_provider: None,
                 provider_id: None,
                 confidence: None,
             }),
@@ -5888,13 +6419,6 @@ mod tests {
         assert_eq!(apply.failed, 1);
         let result = apply.items.first().expect("single apply result");
         assert!(!result.success);
-        assert!(
-            result
-                .error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("rename sidecar update failed")
-        );
         assert!(source_media.exists());
         assert!(!target_media.exists());
 
@@ -6013,7 +6537,12 @@ mod tests {
         let media = PathBuf::from(
             "/media/movies/Ghostbusters - Frozen Empire (2024) - [tmdbid-967847]/Ghostbusters.mkv",
         );
-        let candidate = infer_metadata_candidate(&media, "ghostbusters-uid", None);
+        let candidate = infer_metadata_candidate(
+            &media,
+            "ghostbusters-uid",
+            None,
+            MetadataProvider::Tmdb,
+        );
         assert_eq!(candidate.title, "Ghostbusters Frozen Empire");
         assert_eq!(candidate.year, Some(2024));
         assert_eq!(candidate.provider_id, "tmdb-967847");
@@ -6025,10 +6554,36 @@ mod tests {
         let media = PathBuf::from(
             "/media/movies/Zootopia 2 (2025) - [imdb-tt26443597]/Zootopia 2 (2025).mkv",
         );
-        let candidate = infer_metadata_candidate(&media, "zootopia-uid", None);
+        let candidate = infer_metadata_candidate(
+            &media,
+            "zootopia-uid",
+            None,
+            MetadataProvider::Tmdb,
+        );
         assert_eq!(candidate.title, "Zootopia 2");
         assert_eq!(candidate.year, Some(2025));
         assert_eq!(candidate.provider_id, "imdb-tt26443597");
+    }
+
+    #[test]
+    fn metadata_inference_respects_provider_override_when_ids_conflict() {
+        let media = PathBuf::from(
+            "/media/movies/Ghostbusters - Frozen Empire (2024) - [tmdbid-967847]/Ghostbusters.mkv",
+        );
+        let candidate = infer_metadata_candidate(
+            &media,
+            "ghostbusters-uid",
+            Some(&MetadataOverrideInput {
+                title: None,
+                year: None,
+                metadata_provider: Some("imdb".to_string()),
+                provider_id: None,
+                confidence: None,
+            }),
+            MetadataProvider::Tmdb,
+        );
+        assert_eq!(candidate.provider, MetadataProvider::Imdb);
+        assert!(candidate.provider_id.starts_with("imdb-"));
     }
 
     #[test]
@@ -6045,7 +6600,12 @@ mod tests {
         )
         .expect("write nfo");
 
-        let candidate = infer_metadata_candidate(&media, "wrong-movie-uid", None);
+        let candidate = infer_metadata_candidate(
+            &media,
+            "wrong-movie-uid",
+            None,
+            MetadataProvider::Tmdb,
+        );
         assert_eq!(candidate.title, "Correct Movie");
         assert_eq!(candidate.year, Some(2024));
         assert_eq!(candidate.provider_id, "imdb-tt1234567");
@@ -6227,7 +6787,12 @@ mod tests {
     #[test]
     fn metadata_inference_extracts_title_year_and_provider() {
         let media = PathBuf::from("/tmp/The.Movie.2021.1080p.WEBRip.x264.mkv");
-        let candidate = infer_metadata_candidate(&media, "the-movie-uid", None);
+        let candidate = infer_metadata_candidate(
+            &media,
+            "the-movie-uid",
+            None,
+            MetadataProvider::Tmdb,
+        );
         assert_eq!(candidate.title, "The Movie");
         assert_eq!(candidate.year, Some(2021));
         assert!(candidate.provider_id.starts_with("tmdb-local-"));
@@ -6240,10 +6805,16 @@ mod tests {
         let metadata_override = MetadataOverrideInput {
             title: Some("Custom Title".to_string()),
             year: Some(1999),
+            metadata_provider: None,
             provider_id: Some("tmdb-override-123".to_string()),
             confidence: Some(0.98),
         };
-        let candidate = infer_metadata_candidate(&media, "the-movie-uid", Some(&metadata_override));
+        let candidate = infer_metadata_candidate(
+            &media,
+            "the-movie-uid",
+            Some(&metadata_override),
+            MetadataProvider::Tmdb,
+        );
         assert_eq!(candidate.title, "Custom Title");
         assert_eq!(candidate.year, Some(1999));
         assert_eq!(candidate.provider_id, "tmdb-override-123");

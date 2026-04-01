@@ -28,7 +28,7 @@
 	<PageHero
 		eyebrow="First Boot Guide"
 		title="Prepare Your Jellyfin Library for Safe Automation"
-		lead="This guided setup confirms library detection, lets you choose indexing and naming policy, then starts indexing only at the final launch step."
+		lead="This guided setup confirms library detection, captures your metadata and naming golden state, then starts indexing only at the final launch step."
 	/>
 
 	<section class="wizard-card">

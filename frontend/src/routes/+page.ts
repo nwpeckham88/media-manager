@@ -4,6 +4,7 @@ import type {
 	DuplicateGroupsSummary,
 	IndexItemsSummary,
 	FormattingCandidatesSummary,
+	GoldenStateProgress,
 	RecentJobsResponse
 } from '$lib/types/api';
 
@@ -17,12 +18,13 @@ type IndexStats = {
 type LoadFetch = Parameters<PageLoad>[0]['fetch'];
 
 export const load: PageLoad = async ({ fetch }) => {
-	const [indexStats, exactDuplicates, semanticDuplicates, metadataQueue, formattingQueue, recentJobs] = await Promise.all([
+	const [indexStats, exactDuplicates, semanticDuplicates, metadataQueue, formattingQueue, goldenStateProgress, recentJobs] = await Promise.all([
 		readJson<IndexStats>(fetch, '/api/index/stats'),
 		readJson<DuplicateGroupsSummary>(fetch, '/api/consolidation/exact-duplicates?limit=1&min_group_size=2'),
 		readJson<DuplicateGroupsSummary>(fetch, '/api/consolidation/semantic-duplicates?limit=1&min_group_size=2'),
 		readJson<IndexItemsSummary>(fetch, '/api/index/items?limit=1&offset=0&only_missing_provider=true&max_confidence=0.95'),
 		readJson<FormattingCandidatesSummary>(fetch, '/api/formatting/candidates?limit=1&offset=0'),
+		readJson<GoldenStateProgress>(fetch, '/api/workflow/golden-state-progress'),
 		readJson<RecentJobsResponse>(fetch, '/api/jobs/recent?limit=12')
 	]);
 
@@ -32,6 +34,7 @@ export const load: PageLoad = async ({ fetch }) => {
 		semanticDuplicates,
 		metadataQueue,
 		formattingQueue,
+		goldenStateProgress,
 		recentJobs,
 		loadedAt: new Date().toISOString()
 	};

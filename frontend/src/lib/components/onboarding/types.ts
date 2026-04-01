@@ -8,6 +8,8 @@ export type AppConfigResponse = {
 	library_roots: string[];
 	state_dir: string;
 	auth_enabled: boolean;
+	metadata_provider: 'tmdb' | 'imdb' | 'tvdb';
+	naming_format: 'movie_title_year' | 'movie_title_subtitle_year';
 };
 
 export type RootScanSummary = {

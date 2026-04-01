@@ -1,22 +1,68 @@
 <script lang="ts">
 	import { get } from 'svelte/store';
+	import { onMount } from 'svelte';
 	import PageHero from '$lib/components/ui/PageHero.svelte';
 	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import { appSettings, updateAppSettings, type DashboardRefreshPolicy } from '$lib/workflow/settings';
-	import type { HashingMode } from '$lib/workflow/onboarding';
+	import type { HashingMode, MetadataProvider, NamingFormat } from '$lib/workflow/onboarding';
 
 	const current = get(appSettings);
 	let hashingMode = $state<HashingMode>(current.defaultHashingMode);
+	let metadataProvider = $state<MetadataProvider>(current.metadataProvider);
+	let namingFormat = $state<NamingFormat>(current.namingFormat);
 	let refreshPolicy = $state<DashboardRefreshPolicy>(current.dashboardRefreshPolicy);
 	let notice = $state('');
+	let error = $state('');
 
-	function saveSettings() {
+	function authHeaders(contentType = false): HeadersInit {
+		const token = window.localStorage.getItem('mm-api-token');
+		const headers: Record<string, string> = {};
+		if (contentType) {
+			headers['content-type'] = 'application/json';
+		}
+		if (token) {
+			headers.Authorization = `Bearer ${token}`;
+		}
+		return headers;
+	}
+
+	onMount(async () => {
+		const response = await fetch('/api/config/golden-state', { headers: authHeaders() });
+		if (!response.ok) {
+			return;
+		}
+
+		const payload = (await response.json()) as {
+			metadata_provider: MetadataProvider;
+			naming_format: NamingFormat;
+		};
+		metadataProvider = payload.metadata_provider;
+		namingFormat = payload.naming_format;
+	});
+
+	async function saveSettings() {
+		error = '';
+		notice = '';
+		const response = await fetch('/api/config/golden-state', {
+			method: 'POST',
+			headers: authHeaders(true),
+			body: JSON.stringify({
+				metadata_provider: metadataProvider,
+				naming_format: namingFormat
+			})
+		});
+		if (!response.ok) {
+			error = `Failed to save golden state (HTTP ${response.status}).`;
+			return;
+		}
+
 		updateAppSettings({
 			defaultHashingMode: hashingMode,
 			dashboardRefreshPolicy: refreshPolicy,
-			renamePreset: 'movie_year'
+			metadataProvider,
+			namingFormat
 		});
-		notice = 'Settings saved. Onboarding defaults and runtime behavior updated.';
+		notice = 'Settings saved. Golden-state preferences and onboarding defaults are updated.';
 	}
 </script>
 
@@ -30,6 +76,9 @@
 		title="High-Level Workflow Settings"
 		lead="Configure indexing and merge policies in one place. These defaults are used by onboarding."
 	>
+		{#if error}
+			<p class="notice mono">{error}</p>
+		{/if}
 		{#if notice}
 			<p class="notice mono">{notice}</p>
 		{/if}
@@ -45,9 +94,16 @@
 				<label><input type="radio" name="hashing" value="strict" bind:group={hashingMode} /> Strict hashing</label>
 			</article>
 			<article>
-				<p class="label mono">Rename Pattern</p>
-				<label><input type="radio" checked disabled /> Movie Name - Subtitle (Year)</label>
-				<p class="muted">Canonical naming is mandatory for semantic-merge normalization.</p>
+				<p class="label mono">Metadata Provider</p>
+				<label><input type="radio" name="provider" value="tmdb" bind:group={metadataProvider} /> TMDB</label>
+				<label><input type="radio" name="provider" value="imdb" bind:group={metadataProvider} /> IMDb</label>
+				<label><input type="radio" name="provider" value="tvdb" bind:group={metadataProvider} /> TVDB</label>
+			</article>
+			<article>
+				<p class="label mono">Naming Format</p>
+				<label><input type="radio" name="naming-format" value="movie_title_subtitle_year" bind:group={namingFormat} /> Movie Title - Subtitle (Year)</label>
+				<label><input type="radio" name="naming-format" value="movie_title_year" bind:group={namingFormat} /> Movie Title (Year)</label>
+				<p class="muted">TV naming remains Jellyfin-safe with season/episode format.</p>
 			</article>
 		</div>
 	</SurfaceCard>

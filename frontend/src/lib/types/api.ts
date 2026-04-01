@@ -36,6 +36,14 @@ export type FormattingCandidatesSummary = {
 	total_items: number;
 };
 
+export type GoldenStateProgress = {
+	metadata_provider: 'tmdb' | 'imdb' | 'tvdb';
+	naming_format: 'movie_title_year' | 'movie_title_subtitle_year';
+	total_indexed: number;
+	metadata_non_compliant: number;
+	naming_non_compliant: number;
+};
+
 export type RecentJobsResponse = {
 	items: JobRecord[];
 };
