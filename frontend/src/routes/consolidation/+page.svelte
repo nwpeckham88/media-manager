@@ -89,6 +89,8 @@
 		}[];
 	};
 
+	const CONSOLIDATION_GROUP_LIMIT = 80;
+
 	let loading = $state(false);
 	let indexing = $state(false);
 	let error = $state('');
@@ -140,7 +142,9 @@
 	}
 
 	async function loadExactDuplicateGroups() {
-		const response = await apiFetch('/api/consolidation/exact-duplicates?limit=30&min_group_size=2');
+		const response = await apiFetch(
+			`/api/consolidation/exact-duplicates?limit=${CONSOLIDATION_GROUP_LIMIT}&min_group_size=2`
+		);
 		if (!response.ok) {
 			error = `Unable to load duplicate groups (${response.status})`;
 			return;
@@ -151,7 +155,9 @@
 	}
 
 	async function loadSemanticDuplicateGroups() {
-		const response = await apiFetch('/api/consolidation/semantic-duplicates?limit=30&min_group_size=2');
+		const response = await apiFetch(
+			`/api/consolidation/semantic-duplicates?limit=${CONSOLIDATION_GROUP_LIMIT}&min_group_size=2`
+		);
 		if (!response.ok) {
 			error = `Unable to load semantic groups (${response.status})`;
 			return;
@@ -848,37 +854,39 @@
 
 <style>
 	.stage-shell {
-		width: min(var(--content-max), 94vw);
-		margin: var(--space-4) auto calc(var(--space-6) * 2);
+		width: min(var(--content-max), 96vw);
+		margin: var(--space-3) auto calc(var(--space-6) * 1.5);
 		display: grid;
-		gap: var(--space-4);
+		gap: var(--space-3);
 	}
 
 	.stage-card {
 		display: grid;
-		gap: var(--space-3);
+		gap: var(--space-2);
 		backdrop-filter: blur(2px);
 	}
 
 	.actions {
 		display: flex;
-		gap: var(--space-2);
+		gap: calc(var(--space-2) * 0.75);
 		align-items: center;
 		flex-wrap: wrap;
-		margin-bottom: var(--space-3);
+		margin-bottom: var(--space-2);
 	}
 
 	button,
 	.queue-link {
 		border-radius: var(--radius-md);
 		border: 1px solid var(--ring);
-		padding: 0.5rem 0.65rem;
+		padding: 0.35rem 0.5rem;
 		font: inherit;
 		background: color-mix(in srgb, var(--card) 95%, transparent);
 		color: var(--text);
 		font-weight: 700;
 		text-decoration: none;
-		font-size: var(--font-small);
+		font-size: 0.78rem;
+		line-height: 1.15;
+		min-height: 2rem;
 	}
 
 	button {
@@ -892,7 +900,7 @@
 
 	.summary-line {
 		margin: 0;
-		font-size: var(--font-small);
+		font-size: 0.78rem;
 		color: var(--muted);
 	}
 
@@ -901,7 +909,7 @@
 		padding: 0;
 		margin: 0;
 		display: grid;
-		gap: var(--space-2);
+		gap: calc(var(--space-2) * 0.55);
 	}
 
 	.rows li {
@@ -909,24 +917,40 @@
 		justify-content: space-between;
 		gap: var(--space-3);
 		border-bottom: 1px dashed var(--ring);
-		padding-bottom: var(--space-2);
+		padding-bottom: calc(var(--space-2) * 0.55);
+		font-size: 0.8rem;
+	}
+
+	.rows li > span {
+		flex: 1 1 auto;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.rows li > strong {
+		flex: 0 0 auto;
+		white-space: nowrap;
+		font-size: 0.77rem;
 	}
 
 	.group-grid {
 		display: grid;
-		gap: var(--space-3);
+		gap: var(--space-2);
+		grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
 	}
 
 	.group-card {
 		border: 1px solid var(--ring);
 		border-radius: var(--radius-md);
-		padding: var(--space-3);
+		padding: var(--space-2);
 		background: color-mix(in srgb, var(--card) 87%, transparent);
 	}
 
 	.merge-policy {
-		margin: var(--space-2) 0 var(--space-4);
-		font-size: var(--font-body);
+		margin: var(--space-1) 0 var(--space-2);
+		font-size: 0.86rem;
 		color: var(--muted);
 	}
 
@@ -938,8 +962,8 @@
 	.plan-box {
 		border: 1px solid var(--ring);
 		border-radius: var(--radius-md);
-		padding: var(--space-3);
-		margin-bottom: var(--space-3);
+		padding: var(--space-2);
+		margin-bottom: var(--space-2);
 		background: color-mix(in srgb, var(--card) 92%, transparent);
 	}
 
@@ -949,7 +973,37 @@
 
 	.plan-box .muted {
 		color: var(--muted);
-		margin-top: var(--space-2);
+		margin-top: var(--space-1);
+	}
+
+	@media (max-width: 900px) {
+		button,
+		.queue-link {
+			min-height: 2.75rem;
+			padding: 0.5rem 0.7rem;
+			font-size: 0.84rem;
+		}
+
+		.group-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.rows li {
+			flex-direction: column;
+			align-items: flex-start;
+			gap: 0.15rem;
+		}
+
+		.rows li > span,
+		.rows li > strong {
+			white-space: normal;
+		}
+
+		.rows li > span {
+			overflow: visible;
+			text-overflow: clip;
+			word-break: break-word;
+		}
 	}
 
 	.modal-backdrop {
