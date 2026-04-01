@@ -6,7 +6,7 @@
 
 <section class="panel" aria-label="Indexing Mode">
 	<header>
-		<p class="eyebrow">Step 3</p>
+		<p class="eyebrow">Step 2</p>
 		<h2>Indexing Depth</h2>
 		<p>Choose speed versus verification depth for your first index pass.</p>
 	</header>

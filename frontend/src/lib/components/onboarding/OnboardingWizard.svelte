@@ -82,7 +82,7 @@
 		}
 	});
 
-	async function startIndexing() {
+	async function startIndexing(): Promise<boolean> {
 		startError = '';
 		starting = true;
 
@@ -106,13 +106,15 @@
 
 			if (!response.ok) {
 				startError = `Failed to start index: HTTP ${response.status}`;
-				return;
+				return false;
 			}
 
 			indexingStarted = true;
 			kickoffPolling();
+			return true;
 		} catch (error) {
 			startError = error instanceof Error ? error.message : 'Unknown error while starting index';
+			return false;
 		} finally {
 			starting = false;
 		}
@@ -183,19 +185,30 @@
 		}
 		await goto('/');
 	}
+
+	async function finalizeOnboarding() {
+		if (!canFinishWithoutStarting) {
+			const started = await startIndexing();
+			if (!started) {
+				return;
+			}
+		}
+
+		await finishSetup();
+	}
 </script>
 
 <section class="wizard-shell">
 	<div class="steps" role="tablist" aria-label="Setup Steps">
 		<button type="button" class:active={step === 1} onclick={() => (step = 1)}>1. Detect</button>
 		<button type="button" class:active={step === 2} onclick={() => canAdvanceFromDetection && (step = 2)}>
-			2. Status
+			2. Indexing
 		</button>
 		<button type="button" class:active={step === 3} onclick={() => canAdvanceFromDetection && (step = 3)}>
-			3. Hashing Mode
+			3. Naming + Policy
 		</button>
 		<button type="button" class:active={step === 4} onclick={() => canAdvanceFromDetection && (step = 4)}>
-			4. Naming + Start
+			4. Launch
 		</button>
 	</div>
 
@@ -203,16 +216,8 @@
 		{#if step === 1}
 			<LibraryDetectionPanel {configState} {scanState} />
 		{:else if step === 2}
-			<ScanStatusPanel
-				indexStatsState={localIndexStats}
-				recentJobsState={localRecentJobs}
-				{indexingStarted}
-				{starting}
-				{startError}
-			/>
-		{:else if step === 3}
 			<IndexingModeSelector bind:value={hashingMode} />
-		{:else}
+		{:else if step === 3}
 			<div class="final-step">
 				<RenamePresetSelector bind:value={renamePreset} />
 				<section class="policy-card" aria-label="Workflow Policy">
@@ -229,15 +234,25 @@
 						</select>
 					</label>
 				</section>
-				{#if indexingStarted || starting || canFinishWithoutStarting || startError}
-					<ScanStatusPanel
-						indexStatsState={localIndexStats}
-						recentJobsState={localRecentJobs}
-						{indexingStarted}
-						{starting}
-						{startError}
-					/>
-				{/if}
+			</div>
+		{:else}
+			<div class="final-step">
+				<section class="policy-card" aria-label="Ready to Launch">
+					<p class="mono label">Ready to Launch</p>
+					<p class="muted">
+						Indexing starts only when you finish this setup. No background task is created before this step.
+					</p>
+					<p class="muted">
+						If your library was already indexed earlier, setup will complete immediately without starting a new job.
+					</p>
+				</section>
+				<ScanStatusPanel
+					indexStatsState={localIndexStats}
+					recentJobsState={localRecentJobs}
+					{indexingStarted}
+					{starting}
+					{startError}
+				/>
 			</div>
 		{/if}
 	</div>
@@ -251,13 +266,13 @@
 		<div class="right">
 			{#if step < 4}
 				<button type="button" onclick={() => (step += 1)} disabled={step === 1 && !canAdvanceFromDetection}>Continue</button>
-			{:else if !indexingStarted && !canFinishWithoutStarting}
-				<button type="button" onclick={startIndexing} disabled={starting}>
-					{starting ? 'Starting...' : 'Start Indexing With These Choices'}
-				</button>
 			{:else}
-				<button type="button" onclick={finishSetup} disabled={!indexingStarted && !canFinishWithoutStarting}>
-					Enter Dashboard
+				<button type="button" onclick={finalizeOnboarding} disabled={starting}>
+					{starting
+						? 'Starting...'
+						: canFinishWithoutStarting
+							? 'Finish Setup'
+							: 'Finish Setup and Start Indexing'}
 				</button>
 			{/if}
 		</div>

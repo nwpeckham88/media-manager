@@ -6,17 +6,19 @@
 
 <section class="panel" aria-label="Rename Preset">
 	<header>
-		<p class="eyebrow">Step 4</p>
+		<p class="eyebrow">Step 3</p>
 		<h2>Naming Strategy</h2>
-		<p>For this release, setup exposes one Jellyfin-safe naming standard.</p>
+		<p>Setup applies a single canonical Jellyfin-safe naming policy for both movies and TV episodes.</p>
 	</header>
 
 	<label class="preset selected">
 		<input type="radio" name="rename-preset" value="movie_year" bind:group={value} />
 		<div>
-			<strong>Movie Name - Subtitle (Year)</strong>
-			<p>Example: <span class="mono">Blade Runner - Final Cut (1982).mkv</span></p>
-			<p class="note">Keeps directories stable and portable without app-specific metadata dependencies.</p>
+			<strong>Canonical Jellyfin Naming</strong>
+			<p>Movies: <span class="mono">Movie Name - Subtitle (Year).ext</span></p>
+			<p>TV episodes: <span class="mono">Show - S01E01 - Episode Title.ext</span></p>
+			<p class="note">Examples: <span class="mono">Blade Runner - Final Cut (1982).mkv</span> and <span class="mono">Yellowjackets - S03E01 - It Girl.mkv</span></p>
+			<p class="note">This keeps semantic merges predictable and parent-folder renames consistent across providers.</p>
 		</div>
 	</label>
 </section>

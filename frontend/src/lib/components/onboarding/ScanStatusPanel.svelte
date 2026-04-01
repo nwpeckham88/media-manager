@@ -32,7 +32,7 @@
 
 <section class="panel">
 	<header>
-		<p class="eyebrow">Step 2</p>
+		<p class="eyebrow">Step 4</p>
 		<h2>Scan + Index Status</h2>
 		<p>Watch detection and indexing progress before entering the main workflow hub.</p>
 	</header>
