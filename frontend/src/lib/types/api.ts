@@ -17,6 +17,13 @@ export type ApiState<T> = {
 	error?: string;
 };
 
+export type BulkAction = 'metadata_lookup' | 'combine_duplicates' | 'rename' | 'validate_nfo';
+
+export const BULK_ACTION_METADATA_LOOKUP: BulkAction = 'metadata_lookup';
+export const BULK_ACTION_COMBINE_DUPLICATES: BulkAction = 'combine_duplicates';
+export const BULK_ACTION_RENAME: BulkAction = 'rename';
+export const BULK_ACTION_VALIDATE_NFO: BulkAction = 'validate_nfo';
+
 export type DuplicateGroupsSummary = {
 	total_groups: number;
 };
@@ -34,7 +41,7 @@ export type RecentJobsResponse = {
 };
 
 export type BulkDryRunResponse = {
-	action?: string;
+	action?: BulkAction;
 	batch_hash: string;
 	total_items: number;
 	plan_ready: boolean;
@@ -65,7 +72,7 @@ export type BulkDryRunResponse = {
 };
 
 export type BulkApplyResponse = {
-	action?: string;
+	action?: BulkAction;
 	batch_hash?: string;
 	total_items: number;
 	succeeded: number;

@@ -1852,7 +1852,8 @@ fn execute_bulk_dry_run(
         ));
     }
 
-    build_bulk_preview(state, &request.action, &request.items)
+    let action = normalize_bulk_action(&request.action)?;
+    build_bulk_preview(state, action, &request.items)
 }
 
 fn execute_bulk_apply(
@@ -1866,9 +1867,11 @@ fn execute_bulk_apply(
         ));
     }
 
+    let action = normalize_bulk_action(&request.action)?;
+
     ensure_preflight_ready(state)?;
 
-    let preview = build_bulk_preview(state, &request.action, &request.items)?;
+    let preview = build_bulk_preview(state, action, &request.items)?;
     if preview.batch_hash != request.approved_batch_hash {
         return Err((
             StatusCode::CONFLICT,
@@ -1895,7 +1898,7 @@ fn execute_bulk_apply(
             continue;
         }
 
-        if request.action == "rename" {
+        if action == BulkAction::Rename {
             let Some(target_path_value) = item.proposed_media_path.clone() else {
                 applied_items.push(BulkApplyItemResult {
                     media_path: item.media_path,
@@ -2046,7 +2049,7 @@ fn execute_bulk_apply(
             continue;
         }
 
-        if request.action == "validate_nfo" {
+        if action == BulkAction::ValidateNfo {
             let Some(target_nfo_path) = item.proposed_media_path.clone() else {
                 applied_items.push(BulkApplyItemResult {
                     media_path: item.media_path,
@@ -2106,7 +2109,7 @@ fn execute_bulk_apply(
             continue;
         }
 
-        if request.action == "metadata_lookup" {
+        if action == BulkAction::MetadataLookup {
             let media_path = PathBuf::from(&item.media_path);
             let metadata_title = item
                 .metadata_title
@@ -2179,7 +2182,7 @@ fn execute_bulk_apply(
             continue;
         }
 
-        if request.action == "combine_duplicates" {
+        if action == BulkAction::CombineDuplicates {
             let target_uid = item
                 .proposed_item_uid
                 .clone()
@@ -2286,7 +2289,7 @@ fn execute_bulk_apply(
     let succeeded = applied_items.iter().filter(|v| v.success).count();
     let failed = applied_items.len().saturating_sub(succeeded);
     Ok(BulkApplyResponse {
-        action: request.action.clone(),
+        action,
         batch_hash: request.approved_batch_hash.clone(),
         total_items: applied_items.len(),
         succeeded,
@@ -2297,11 +2300,10 @@ fn execute_bulk_apply(
 
 fn build_bulk_preview(
     state: &AppState,
-    action: &str,
+    action: BulkAction,
     items: &[BulkItemInput],
 ) -> Result<BulkDryRunResponse, (StatusCode, String)> {
-    let action = normalize_bulk_action(action)?;
-    let duplicate_groups = if action == "combine_duplicates" {
+    let duplicate_groups = if action == BulkAction::CombineDuplicates {
         Some(build_duplicate_groups(items))
     } else {
         None
@@ -2349,7 +2351,7 @@ fn build_bulk_preview(
             can_apply,
             note,
             error,
-        ) = if action == "rename" {
+        ) = if action == BulkAction::Rename {
             match compute_rename_target(
                 &media_path,
                 item.metadata_override.as_ref(),
@@ -2378,7 +2380,7 @@ fn build_bulk_preview(
                     Some(message),
                 ),
             }
-        } else if action == "validate_nfo" {
+        } else if action == BulkAction::ValidateNfo {
             match compute_nfo_target(&media_path) {
                 Ok((nfo_path, nfo_note)) => (
                     Some(nfo_path.display().to_string()),
@@ -2403,7 +2405,7 @@ fn build_bulk_preview(
                     Some(message),
                 ),
             }
-        } else if action == "combine_duplicates" {
+        } else if action == BulkAction::CombineDuplicates {
             match &duplicate_groups {
                 Some(groups) => {
                     let (proposed_uid, group_size) =
@@ -2437,7 +2439,7 @@ fn build_bulk_preview(
                     Some("duplicate groups unavailable".to_string()),
                 ),
             }
-        } else if action == "metadata_lookup" {
+        } else if action == BulkAction::MetadataLookup {
             let candidate =
                 infer_metadata_candidate(&media_path, &item_uid, item.metadata_override.as_ref());
             (
@@ -2524,7 +2526,7 @@ fn build_bulk_preview(
     })
 }
 
-fn hash_bulk_preview(action: &str, items: &[BulkDryRunItem]) -> String {
+fn hash_bulk_preview(action: &BulkAction, items: &[BulkDryRunItem]) -> String {
     let mut hasher = DefaultHasher::new();
     action.hash(&mut hasher);
     for item in items {
@@ -2563,13 +2565,13 @@ fn hash_bulk_preview(action: &str, items: &[BulkDryRunItem]) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn normalize_bulk_action(action: &str) -> Result<String, (StatusCode, String)> {
+fn normalize_bulk_action(action: &str) -> Result<BulkAction, (StatusCode, String)> {
     let trimmed = action.trim().to_ascii_lowercase();
     let normalized = match trimmed.as_str() {
-        "metadata_lookup" => "metadata_lookup",
-        "combine_duplicates" => "combine_duplicates",
-        "rename" => "rename",
-        "validate_nfo" => "validate_nfo",
+        "metadata_lookup" => BulkAction::MetadataLookup,
+        "combine_duplicates" => BulkAction::CombineDuplicates,
+        "rename" => BulkAction::Rename,
+        "validate_nfo" => BulkAction::ValidateNfo,
         _ => {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -2578,7 +2580,7 @@ fn normalize_bulk_action(action: &str) -> Result<String, (StatusCode, String)> {
         }
     };
 
-    Ok(normalized.to_string())
+    Ok(normalized)
 }
 
 fn derive_item_uid(item: &BulkItemInput, media_path: &std::path::Path) -> String {
@@ -4852,7 +4854,7 @@ struct BulkDryRunItem {
 
 #[derive(Debug, Serialize)]
 struct BulkDryRunResponse {
-    action: String,
+    action: BulkAction,
     batch_hash: String,
     total_items: usize,
     plan_ready: bool,
@@ -4874,12 +4876,33 @@ struct BulkApplyItemResult {
 
 #[derive(Debug, Serialize)]
 struct BulkApplyResponse {
-    action: String,
+    action: BulkAction,
     batch_hash: String,
     total_items: usize,
     succeeded: usize,
     failed: usize,
     items: Vec<BulkApplyItemResult>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+enum BulkAction {
+    MetadataLookup,
+    CombineDuplicates,
+    Rename,
+    ValidateNfo,
+}
+
+impl std::fmt::Display for BulkAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::MetadataLookup => "metadata_lookup",
+            Self::CombineDuplicates => "combine_duplicates",
+            Self::Rename => "rename",
+            Self::ValidateNfo => "validate_nfo",
+        };
+        write!(f, "{value}")
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -4920,11 +4943,12 @@ mod tests {
     use crate::toolchain::{ProbeStatus, ResolvedBinary, ToolchainSnapshot};
 
     use super::{
-        AppState, BulkApplyRequest, BulkDryRunRequest, BulkItemInput, DEFAULT_LIBRARY_LIMIT,
-        DEFAULT_RECENT_LIMIT, MAX_LIBRARY_LIMIT, MAX_PATH_COMPONENT_BYTES, MAX_RECENT_LIMIT,
-        MetadataOverrideInput, SemanticDuplicateItem, build_duplicate_groups, compute_nfo_target,
-        compute_rename_target, duplicate_key_for_media_path, ensure_media_file_path_allowed,
-        execute_bulk_apply, execute_bulk_dry_run, extract_episode_signature_from_media_path,
+        AppState, BulkAction, BulkApplyRequest, BulkDryRunRequest, BulkItemInput,
+        DEFAULT_LIBRARY_LIMIT, DEFAULT_RECENT_LIMIT, MAX_LIBRARY_LIMIT,
+        MAX_PATH_COMPONENT_BYTES, MAX_RECENT_LIMIT, MetadataOverrideInput,
+        SemanticDuplicateItem, build_duplicate_groups, compute_nfo_target, compute_rename_target,
+        duplicate_key_for_media_path, ensure_media_file_path_allowed, execute_bulk_apply,
+        execute_bulk_dry_run, extract_episode_signature_from_media_path,
         find_season_episode_token, infer_metadata_candidate, normalize_bulk_action,
         normalize_duplicate_key, normalize_filename_stem, normalize_job_status_filter,
         normalize_library_limit, normalize_recent_limit, partition_semantic_group_items,
@@ -5056,11 +5080,11 @@ mod tests {
     fn bulk_action_accepts_expected_values() {
         assert_eq!(
             normalize_bulk_action("rename").expect("valid action"),
-            "rename"
+            BulkAction::Rename
         );
         assert_eq!(
             normalize_bulk_action(" metadata_lookup ").expect("valid action"),
-            "metadata_lookup"
+            BulkAction::MetadataLookup
         );
         assert!(normalize_bulk_action("unknown").is_err());
     }
@@ -5788,6 +5812,9 @@ mod tests {
                 .and_then(|v| v.proposed_media_path.as_ref())
                 .expect("dry run target path"),
         );
+        if let Some(parent) = target_path.parent() {
+            fs::create_dir_all(parent).expect("create target parent");
+        }
         fs::write(&target_path, b"conflict").expect("create target conflict");
 
         let apply_request = BulkApplyRequest {

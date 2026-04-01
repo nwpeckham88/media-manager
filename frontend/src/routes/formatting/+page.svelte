@@ -5,7 +5,12 @@
 	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import { markStageComplete, markStageIncomplete } from '$lib/workflow/progress';
 	import { apiFetch } from '$lib/utils/api';
-	import type { BulkDryRunResponse, BulkApplyResponse, BulkRollbackResponse } from '$lib/types/api';
+	import {
+		BULK_ACTION_RENAME,
+		type BulkDryRunResponse,
+		type BulkApplyResponse,
+		type BulkRollbackResponse
+	} from '$lib/types/api';
 
 	type FormattingCandidateItem = {
 		media_path: string;
@@ -102,7 +107,7 @@
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
-				action: 'rename',
+				action: BULK_ACTION_RENAME,
 				items: buildPayload()
 			})
 		});
@@ -134,7 +139,7 @@
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({
-				action: 'rename',
+				action: BULK_ACTION_RENAME,
 				approved_batch_hash: preview.batch_hash,
 				items: buildPayload()
 			})

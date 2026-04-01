@@ -5,7 +5,13 @@
 	import SurfaceCard from '$lib/components/ui/SurfaceCard.svelte';
 	import SectionHeader from '$lib/components/ui/SectionHeader.svelte';
 	import { apiFetch } from '$lib/utils/api';
-	import type { BulkDryRunResponse, BulkApplyResponse, ConfirmDialogState } from '$lib/types/api';
+	import {
+		BULK_ACTION_RENAME,
+		type BulkAction,
+		type BulkDryRunResponse,
+		type BulkApplyResponse,
+		type ConfirmDialogState
+	} from '$lib/types/api';
 
 	type AppConfig = {
 		library_roots: string[];
@@ -28,8 +34,6 @@
 		limit: number;
 		items: LibraryItem[];
 	};
-
-	type BulkAction = 'metadata_lookup' | 'combine_duplicates' | 'rename' | 'validate_nfo';
 
 	type MetadataOverrideDraft = {
 		title: string;
@@ -162,7 +166,7 @@
 				media_path: mediaPath,
 				item_uid: fallbackUid,
 				metadata_override: metadataOverride,
-				rename_parent_folder: bulkAction === 'rename' ? renameParentFolders : undefined
+				rename_parent_folder: bulkAction === BULK_ACTION_RENAME ? renameParentFolders : undefined
 			};
 		});
 	}
@@ -414,7 +418,7 @@
 				<button type="button" disabled={bulkBusy} onclick={runBulkPreview}>Preview Selected</button>
 				<button type="button" disabled={bulkBusy || !preview || !preview.plan_ready || (preview.action === 'metadata_lookup' && metadataPreviewStale)} onclick={applyBulkPreview}>Apply Preview</button>
 				<a class="queue-link" href="/queue">Queue</a>
-				{#if bulkAction === 'rename'}
+				{#if bulkAction === BULK_ACTION_RENAME}
 					<label class="toggle mono">
 						<input
 							type="checkbox"
@@ -437,7 +441,7 @@
 				<p class="mono summary-line">
 				action={preview.action} batch={preview.batch_hash} creates={preview.summary.creates} updates={preview.summary.updates} noops={preview.summary.noops} invalid={preview.summary.invalid}
 				</p>
-			{#if preview.action === 'rename'}
+			{#if preview.action === BULK_ACTION_RENAME}
 				<ul class="rows mono">
 					{#each (preview.items ?? []) as item}
 						<li>
@@ -542,7 +546,7 @@
 					<p class="mono summary-line">
 				total={applyResult.total_items} succeeded={applyResult.succeeded} failed={applyResult.failed}
 					</p>
-			{#if applyResult.action === 'rename'}
+			{#if applyResult.action === BULK_ACTION_RENAME}
 				<ul class="rows mono">
 					{#each applyResult.items as item}
 						<li>
