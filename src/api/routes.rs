@@ -1931,6 +1931,23 @@ fn execute_bulk_apply(
                 continue;
             }
 
+            if !is_path_within_roots_for_target_creation(&target_path, &state.library_roots) {
+                applied_items.push(BulkApplyItemResult {
+                    media_path: item.media_path,
+                    final_media_path: Some(target_path_value),
+                    item_uid: item.item_uid,
+                    applied_provider_id: None,
+                    success: false,
+                    operation_id: None,
+                    sidecar_path: None,
+                    error: Some(
+                        "rename target changed after preview and is outside configured library roots"
+                            .to_string(),
+                    ),
+                });
+                continue;
+            }
+
             if source_path == target_path {
                 applied_items.push(BulkApplyItemResult {
                     media_path: item.media_path,
@@ -1957,6 +1974,25 @@ fn execute_bulk_apply(
                     error: Some("target rename path already exists".to_string()),
                 });
                 continue;
+            }
+
+            if let Some(target_parent) = target_path.parent() {
+                if let Err(err) = fs::create_dir_all(target_parent) {
+                    applied_items.push(BulkApplyItemResult {
+                        media_path: item.media_path,
+                        final_media_path: Some(target_path_value),
+                        item_uid: item.item_uid,
+                        applied_provider_id: None,
+                        success: false,
+                        operation_id: None,
+                        sidecar_path: None,
+                        error: Some(format!(
+                            "failed to create rename target parent {} ({err})",
+                            target_parent.display()
+                        )),
+                    });
+                    continue;
+                }
             }
 
             match apply_rename_with_rollback(&state.state_dir, &source_path, &target_path) {
@@ -2582,7 +2618,12 @@ fn compute_rename_target(
     if let Some(tv_stem_raw) = build_jellyfin_tv_episode_stem(media_path, metadata_override) {
         let (tv_stem, was_truncated) =
             build_rename_stem_with_limits(parent, false, &tv_stem_raw, None, &extension)?;
-        let target = parent.join(format!("{tv_stem}{extension}"));
+        let target_parent = compute_tv_target_parent(media_path, allow_multi_file_parent_rename)?;
+        let target = target_parent.join(format!("{tv_stem}{extension}"));
+        if target.to_string_lossy().len() > MAX_PATH_BYTES {
+            return Err("rename target exceeds filesystem limits and cannot be truncated safely"
+                .to_string());
+        }
         if target == media_path {
             return Ok((
                 target,
@@ -2597,11 +2638,20 @@ fn compute_rename_target(
             ));
         }
 
+        let parent_will_change = target_parent != parent;
         let note = if was_truncated {
-            "will rename to Jellyfin TV episode format (truncated to fit filesystem limits)"
-                .to_string()
+            if parent_will_change {
+                "will rename to Jellyfin TV episode format and canonical show folder (truncated to fit filesystem limits)".to_string()
+            } else {
+                "will rename to Jellyfin TV episode format (truncated to fit filesystem limits)"
+                    .to_string()
+            }
         } else {
-            "will rename to Jellyfin TV episode format".to_string()
+            if parent_will_change {
+                "will rename to Jellyfin TV episode format and canonical show folder".to_string()
+            } else {
+                "will rename to Jellyfin TV episode format".to_string()
+            }
         };
 
         return Ok((target, note));
@@ -2951,6 +3001,85 @@ fn infer_series_title_from_media_path(media_path: &std::path::Path) -> Option<St
     }
 
     Some(parent_name.to_string())
+}
+
+fn compute_tv_target_parent(
+    media_path: &std::path::Path,
+    allow_multi_file_parent_rename: bool,
+) -> Result<PathBuf, String> {
+    let parent = media_path
+        .parent()
+        .ok_or_else(|| "cannot determine rename parent directory".to_string())?;
+
+    if !allow_multi_file_parent_rename {
+        return Ok(parent.to_path_buf());
+    }
+
+    let Some(parent_name) = parent.file_name().and_then(|v| v.to_str()) else {
+        return Ok(parent.to_path_buf());
+    };
+    if !is_likely_season_folder(parent_name) {
+        return Ok(parent.to_path_buf());
+    }
+
+    let Some(series_dir) = parent.parent() else {
+        return Ok(parent.to_path_buf());
+    };
+    let Some(series_name) = series_dir.file_name().and_then(|v| v.to_str()) else {
+        return Ok(parent.to_path_buf());
+    };
+
+    let series_candidate = match parse_movie_folder_pattern(series_name) {
+        Some(parsed) => {
+            let normalized = sanitize_display_filename_component(&normalize_title_for_display_name(
+                &strip_trailing_bracketed_metadata(&parsed.title),
+            ));
+            if normalized.is_empty() {
+                return Ok(parent.to_path_buf());
+            } else if let Some(year) = parsed.year {
+                format!("{normalized} ({year})")
+            } else {
+                normalized
+            }
+        }
+        None => {
+            let normalized = sanitize_display_filename_component(&normalize_title_for_display_name(
+                &strip_trailing_bracketed_metadata(series_name),
+            ));
+            if normalized.is_empty() {
+                return Ok(parent.to_path_buf());
+            } else {
+                normalized
+            }
+        }
+    };
+
+    let mut canonical_series = series_candidate;
+    while canonical_series.len() > MAX_PATH_COMPONENT_BYTES {
+        let Some(_) = canonical_series.pop() else {
+            break;
+        };
+        canonical_series = canonical_series
+            .trim_end_matches(|ch: char| ch.is_whitespace() || ch == '-' || ch == '_')
+            .to_string();
+    }
+    if canonical_series.is_empty() {
+        return Ok(parent.to_path_buf());
+    }
+
+    let target_series = series_dir.with_file_name(&canonical_series);
+    if target_series == series_dir {
+        return Ok(parent.to_path_buf());
+    }
+
+    let target_parent = target_series.join(parent_name);
+    if let Some(file_name) = target_parent.file_name().and_then(|v| v.to_str()) {
+        if file_name.len() > MAX_PATH_COMPONENT_BYTES {
+            return Ok(parent.to_path_buf());
+        }
+    }
+
+    Ok(target_parent)
 }
 
 fn is_likely_season_folder(value: &str) -> bool {
@@ -4374,6 +4503,22 @@ fn ensure_media_file_path_allowed(
     Ok(())
 }
 
+fn is_path_within_roots_for_target_creation(path: &Path, roots: &[PathBuf]) -> bool {
+    if path.exists() {
+        return path_policy::is_path_within_roots(path, roots);
+    }
+
+    let mut cursor = path.parent();
+    while let Some(candidate) = cursor {
+        if candidate.exists() {
+            return path_policy::is_path_within_roots(candidate, roots);
+        }
+        cursor = candidate.parent();
+    }
+
+    false
+}
+
 fn ensure_preflight_ready(state: &AppState) -> Result<(), (StatusCode, String)> {
     let report = run_preflight(&state.library_roots, &state.state_dir, &state.toolchain);
     if report.ready {
@@ -5049,7 +5194,7 @@ mod tests {
             confidence: None,
         };
 
-        let (target, note) = compute_rename_target(&source_media, Some(&override_data), true)
+        let (target, note) = compute_rename_target(&source_media, Some(&override_data), false)
             .expect("rename target computed");
 
         assert_eq!(target.parent(), Some(canonical_dir.as_path()));
@@ -5087,7 +5232,7 @@ mod tests {
             confidence: None,
         };
 
-        let (target, note) = compute_rename_target(&source_media, Some(&override_data), true)
+        let (target, note) = compute_rename_target(&source_media, Some(&override_data), false)
             .expect("rename target computed");
 
         assert_eq!(target.parent(), Some(season_dir.as_path()));
@@ -5096,6 +5241,39 @@ mod tests {
             Some("Common Side Effects - S01E08 - Amelia and Wyatt.mkv")
         );
         assert_eq!(note, "will rename to Jellyfin TV episode format");
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rename_target_tv_can_rename_series_parent_folder_when_enabled() {
+        let root = unique_temp_dir("rename-target-tv-parent-folder");
+        fs::create_dir_all(&root).expect("create root");
+
+        let show_dir = root.join("Yellowjackets (2021) [tvdbid-399731]");
+        let season_dir = show_dir.join("Season 3");
+        fs::create_dir_all(&season_dir).expect("create season dir");
+
+        let source_media = season_dir
+            .join("Yellowjackets - S03E04 - 12 Angry Girls and 1 Drunk Travis [tmdbid-117488].mkv");
+        fs::write(&source_media, b"source").expect("write source media");
+
+        let (target, note) = compute_rename_target(&source_media, None, true)
+            .expect("rename target computed");
+
+        let target_series = target
+            .parent()
+            .and_then(|v| v.parent())
+            .and_then(|v| v.file_name())
+            .and_then(|v| v.to_str())
+            .expect("target series folder name");
+
+        assert_eq!(target_series, "Yellowjackets (2021)");
+        assert_eq!(
+            target.file_name().and_then(|v| v.to_str()),
+            Some("Yellowjackets - S03E04 - 12 Angry Girls and 1 Drunk Travis.mkv")
+        );
+        assert!(note.contains("canonical show folder"));
 
         fs::remove_dir_all(root).expect("cleanup");
     }
@@ -5692,6 +5870,58 @@ mod tests {
         );
         assert!(source_media.exists());
         assert!(!target_media.exists());
+
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn bulk_apply_rename_can_create_tv_parent_folder_target() {
+        let root = unique_temp_dir("bulk-apply-tv-parent-create");
+        fs::create_dir_all(&root).expect("create root");
+        let state_dir = root.join("state");
+        let state = test_app_state(&root, &state_dir);
+
+        let show_dir = root.join("Yellowjackets (2021) [tvdbid-399731]");
+        let season_dir = show_dir.join("Season 3");
+        fs::create_dir_all(&season_dir).expect("create season dir");
+        let media_path = season_dir
+            .join("Yellowjackets - S03E04 - 12 Angry Girls and 1 Drunk Travis [tmdbid-117488].mkv");
+        fs::write(&media_path, b"x").expect("write media");
+
+        let item = BulkItemInput {
+            media_path: media_path.display().to_string(),
+            item_uid: None,
+            metadata_override: None,
+            rename_parent_folder: Some(true),
+        };
+        let apply_item = BulkItemInput {
+            media_path: media_path.display().to_string(),
+            item_uid: None,
+            metadata_override: None,
+            rename_parent_folder: Some(true),
+        };
+
+        let dry_run_request = BulkDryRunRequest {
+            action: "rename".to_string(),
+            items: vec![item],
+        };
+        let dry_run = execute_bulk_dry_run(&state, &dry_run_request).expect("dry run rename");
+
+        let apply_request = BulkApplyRequest {
+            action: "rename".to_string(),
+            approved_batch_hash: dry_run.batch_hash,
+            items: vec![apply_item],
+        };
+        let apply = execute_bulk_apply(&state, &apply_request).expect("apply response");
+        assert_eq!(apply.failed, 0);
+        assert_eq!(apply.succeeded, 1);
+
+        let target_media = root
+            .join("Yellowjackets (2021)")
+            .join("Season 3")
+            .join("Yellowjackets - S03E04 - 12 Angry Girls and 1 Drunk Travis.mkv");
+        assert!(target_media.exists());
+        assert!(!media_path.exists());
 
         fs::remove_dir_all(root).expect("cleanup");
     }
