@@ -157,7 +157,7 @@
 	}
 
 	function semanticGroupKey(group: SemanticDuplicateGroup): string {
-		return `${group.parsed_title}|${group.parsed_year ?? 'none'}|${group.parsed_provider_id ?? 'none'}`;
+		return `${group.parsed_title}|${group.parsed_year ?? 'none'}`;
 	}
 
 	function groupSemanticShowGroups(groups: SemanticDuplicateGroup[]): SemanticShowGroup[] {
@@ -178,6 +178,8 @@
 					items: []
 				};
 				map.set(key, show);
+			} else if (show.parsed_provider_id !== group.parsed_provider_id) {
+				show.parsed_provider_id = null;
 			}
 
 			show.bucket_count += 1;
@@ -737,7 +739,7 @@
 					{@const key = group.key}
 					<article class="group-card">
 						<p class="mono">
-							title={group.parsed_title} year={group.parsed_year ?? 'unknown'} provider={group.parsed_provider_id ?? 'none'}
+							title={group.parsed_title} year={group.parsed_year ?? 'unknown'} provider={group.parsed_provider_id ?? 'mixed'}
 						</p>
 						<p class="mono">items={group.item_count} variants={group.variant_count} episode-buckets={group.bucket_count}</p>
 						<div class="actions">
